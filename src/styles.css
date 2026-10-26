@@ -346,3 +346,91 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 @media (prefers-contrast: more) {
   :root { --line: #80958a; --muted: #d2d8d0; --quiet: #d0d8ce; }
 }
+
+
+/* Small, accessible shortcut reference; no new navigation or editor chrome. */
+.shortcuts-trigger {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+  font: 700 15px/1 ui-monospace, "SFMono-Regular", monospace;
+  color: var(--green);
+}
+.shortcuts-dialog {
+  width: min(560px, calc(100% - 24px));
+  max-height: min(90svh, 720px);
+  padding: 0;
+  overflow: auto;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid #627969;
+  border-radius: 12px;
+  box-shadow: 0 22px 80px #000b;
+}
+.shortcuts-dialog::backdrop {
+  background: rgb(3 8 7 / 75%);
+  backdrop-filter: blur(3px);
+}
+.shortcuts-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px 22px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.shortcuts-heading h2 {
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -.03em;
+}
+.shortcuts-heading p {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.shortcuts-close { flex: none; }
+.shortcuts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+  padding: 18px 22px 24px;
+}
+.shortcuts-grid h3 {
+  margin: 0 0 8px;
+  color: var(--gold);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.shortcut-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  min-height: 32px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 12px;
+}
+.shortcuts-dialog kbd {
+  flex: none;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--field);
+  color: var(--text);
+  font: 600 11px ui-monospace, "SFMono-Regular", monospace;
+}
+@media (max-width: 540px) {
+  .shortcuts-grid { grid-template-columns: 1fr; gap: 18px; }
+  .shortcuts-heading { padding: 18px; }
+  .shortcuts-grid { padding: 18px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .shortcuts-dialog[open] { animation: shortcuts-appear .16s ease-out; }
+  @keyframes shortcuts-appear {
+    from { opacity: 0; transform: translateY(7px); }
+  }
+}

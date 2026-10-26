@@ -57,3 +57,21 @@ The interface retains the compact, dark two-column preview and control panel.
 The preview pauses its frame loop when not animating, offscreen, or in a hidden tab. Animations are capped to 30 FPS, and unused ring/moon shader paths are skipped. Optional spritesheet/video/batch routines load on demand, and production GLSL literals are compacted without additional runtime packages.
 
 The favicon uses the image-generated dark variant, optimized locally to a 64px indexed PNG (1.9 KB).
+
+## Keyboard shortcuts
+
+Press **?** in the editor (or click its small **?** button) for the complete list.
+
+| Shortcut | Action |
+| --- | --- |
+| `R` / `M` | Randomize / mutate the planet |
+| `A` | Toggle animation |
+| `1`–`9` | Select a planet preset in toolbar order |
+| `B` | Generate batch variations |
+| `Mod+S` | Download a PNG |
+| `Mod+Shift+L` | Copy the share link |
+| `?` | Open or close shortcut help |
+| `Escape` | Close shortcut help (native dialog behavior) |
+
+`Mod` is **Ctrl** on Linux/Windows and **Command** on macOS.
+Shortcuts do not run while focus is in a text/number input, select, or other editable field. This uses the framework-independent `@tanstack/hotkeys` core; no new framework or devtools bundle is required.

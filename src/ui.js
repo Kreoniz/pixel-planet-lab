@@ -1,5 +1,6 @@
 import { controlSections, presetButtons, presets } from "./config.js";
 import { controlAvailability } from "./control-availability.js";
+import { shortcuts, actionShortcuts, presetShortcuts, displayShortcut } from "./hotkeys.js";
 
 const toolbarActions = [
   ["randomize", "Random", "primary"],
@@ -20,8 +21,9 @@ export function renderApp(root) {
           </div>
           <div class="toolbar" aria-label="Quick actions">
             ${toolbarActions.map(([action, label, variant]) => `
-              <button type="button" class="${variant ? "button-primary" : ""}" data-action="${action}">${label}</button>
+              <button type="button" class="${variant ? "button-primary" : ""}" data-action="${action}"${shortcutAttrs(action)}>${label}</button>
             `).join("")}
+            <button type="button" class="shortcuts-trigger" data-shortcuts-open aria-haspopup="dialog" aria-controls="shortcuts-dialog" title="Keyboard shortcuts (?)" aria-label="Show keyboard shortcuts">?</button>
           </div>
         </div>
 
@@ -35,7 +37,7 @@ export function renderApp(root) {
 
         <div class="preset-row" role="group" aria-label="Planet presets">
           ${presetButtons.map(([preset, label]) => `
-            <button type="button" data-preset="${preset}" aria-pressed="false">${label}</button>
+            <button type="button" data-preset="${preset}" aria-pressed="false" title="${label} preset (${presetShortcuts[preset]})" aria-keyshortcuts="${presetShortcuts[preset]}">${label}</button>
           `).join("")}
         </div>
       </section>
@@ -51,13 +53,47 @@ export function renderApp(root) {
           <h2>Variations</h2>
           <p>Explore multiple seeds. Select one to keep.</p>
         </div>
-        <button type="button" data-action="batch">Generate batch</button>
+        <button type="button" data-action="batch"${shortcutAttrs("batch")}>Generate batch</button>
       </div>
       <div class="batch-strip" id="batchStrip">
         <p class="batch-empty">Generate a batch to explore other worlds.</p>
       </div>
     </section>
+
+    <dialog class="shortcuts-dialog" id="shortcuts-dialog" aria-labelledby="shortcuts-dialog-title" aria-describedby="shortcuts-dialog-description">
+      <div class="shortcuts-heading">
+        <div>
+          <h2 id="shortcuts-dialog-title">Keyboard shortcuts</h2>
+          <p id="shortcuts-dialog-description">Shortcuts are disabled while editing an input or select.</p>
+        </div>
+        <button type="button" class="shortcuts-close" data-shortcuts-close aria-label="Close keyboard shortcuts">Close <kbd>Esc</kbd></button>
+      </div>
+      <div class="shortcuts-grid">
+        <section aria-label="Editor actions">
+          <h3>Editor</h3>
+          ${shortcutRows("Actions")}
+        </section>
+        <section aria-label="Planet presets">
+          <h3>Presets</h3>
+          ${shortcutRows("Presets")}
+        </section>
+      </div>
+    </dialog>
   `;
+}
+
+function shortcutRows(group) {
+  return shortcuts.filter((shortcut) => shortcut.group === group).map(({ label, hotkey }) =>
+    `<div class="shortcut-row"><span>${label}</span><kbd>${displayShortcut(hotkey)}</kbd></div>`
+  ).join("");
+}
+
+function shortcutAttrs(action) {
+  const hotkey = actionShortcuts[action];
+  if (!hotkey) return "";
+  const aria = hotkey.replace("Mod", "Control");
+  const ariaKeys = hotkey.includes("Mod") ? `${aria} ${hotkey.replace("Mod", "Meta")}` : aria;
+  return ` title="Shortcut: ${displayShortcut(hotkey)}" aria-keyshortcuts="${ariaKeys}"`;
 }
 
 export function syncUi(state) {

@@ -21,7 +21,7 @@ export function normalizePlanetState(input) {
     } else if (control?.type === "select") {
       const choice = control.options.find(([option]) => String(option) === String(value));
       normalized[key] = choice ? choice[0] : fallback;
-    } else if (control?.type === "range" || control?.type === "number") {
+    } else if (control?.type === "range" || control?.type === "number" || control?.type === "percent") {
       const safe = typeof value === "number" && Number.isFinite(value) ? value : fallback;
       const clamped = Math.min(control.max ?? 1, Math.max(control.min ?? 0, safe));
       normalized[key] = control.type === "number" || control.step === 1

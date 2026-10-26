@@ -41,3 +41,19 @@ corepack pnpm test
 ```
 
 Pull requests run the Node tests and the production build in GitHub Actions.
+
+## Editor
+
+The interface retains the compact, dark two-column preview and control panel.
+
+- Settings use native collapsible sections; World and Surface open initially.
+- Discrete options use selects, counts use number inputs, and coverage/opacity use percentages. Continuous effects remain sliders.
+- Unavailable controls are disabled with explanations, without erasing settings when the planet type changes.
+- Drag the preview to move the light; choose a preset, or generate optional variations.
+- Small transitions respect reduced-motion preferences.
+
+## Performance
+
+The preview pauses its frame loop when not animating, offscreen, or in a hidden tab. Animations are capped to 30 FPS, and unused ring/moon shader paths are skipped. Optional spritesheet/video/batch routines load on demand, and production GLSL literals are compacted without additional runtime packages.
+
+The favicon uses the image-generated dark variant, optimized locally to a 64px indexed PNG (1.9 KB).

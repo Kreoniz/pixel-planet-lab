@@ -1,0 +1,98 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { controlSections, presetButtons, presets, state } from "../src/config.js";
+import { renderApp, syncUi } from "../src/ui.js";
+
+test("retains the original two-column studio without introducing navigation", () => {
+  const root = { innerHTML: "" };
+  renderApp(root);
+  const html = root.innerHTML;
+
+  assert.match(html, /class="app-shell"/);
+  assert.match(html, /class="topbar"/);
+  assert.match(html, /id="planetCanvas"/);
+  assert.match(html, /role="status" aria-live="polite"/);
+  assert.doesNotMatch(html, /<nav\b|class="site-header"/);
+  assert.equal((html.match(/class="control-section"/g) || []).length, controlSections.length);
+  assert.equal((html.match(/<details\b/g) || []).length, controlSections.length);
+
+  for (const [name] of presetButtons) {
+    assert.ok(html.includes(`data-preset="${name}"`), `missing ${name}`);
+  }
+  for (const section of controlSections) {
+    for (const control of section.controls) {
+      const marker = control.key ? `data-key="${control.key}"` : `data-action="${control.action}"`;
+      assert.ok(html.includes(marker), `missing ${marker}`);
+    }
+  }
+  for (const action of ["randomize", "mutate", "exportPng", "shareLink", "batch"]) {
+    assert.equal(html.split(`data-action="${action}"`).length - 1, 1, `action ${action} must appear once`);
+  }
+});
+
+test("syncs percentages, labels, and disabled controls without mutating settings", () => {
+  function makeField(help = "") {
+    const classes = new Set();
+    return {
+      dataset: { help },
+      classes,
+      classList: { toggle(name, enabled) { enabled ? classes.add(name) : classes.delete(name); } },
+      title: "",
+    };
+  }
+  function makeInput(key, type = "number", format = undefined) {
+    const field = makeField("Initial help");
+    return {
+      dataset: { key, ...(format ? { format } : {}) },
+      field, type, value: "", checked: false, disabled: false,
+      attributes: {},
+      closest() { return field; },
+      setAttribute(name, value) { this.attributes[name] = value; },
+      removeAttribute(name) { delete this.attributes[name]; },
+    };
+  }
+
+  const cloudInput = makeInput("clouds", "number", "percent");
+  const ringInput = makeInput("ringRadius", "range");
+  const seedInput = makeInput("seed", "number");
+  const output = { dataset: { value: "zoom" }, textContent: "" };
+  const preset = {
+    dataset: { preset: "gas" }, attributes: {},
+    setAttribute(name, value) { this.attributes[name] = value; },
+  };
+
+  const originalDocument = globalThis.document;
+  globalThis.document = {
+    querySelectorAll(selector) {
+      return ({
+        "[data-key]": [cloudInput, ringInput, seedInput],
+        "[data-value]": [output],
+        "[data-preset]": [preset],
+      })[selector] || [];
+    },
+  };
+
+  try {
+    const world = { ...state, body: presets.gas.body, seed: 4567, clouds: 0.37, rings: false, zoom: 0.94 };
+    syncUi(world);
+    assert.equal(cloudInput.value, "37");
+    assert.equal(cloudInput.disabled, true);
+    assert.match(cloudInput.attributes["aria-description"], /rocky worlds/);
+    assert.equal(ringInput.disabled, true);
+    assert.equal(seedInput.value, "4567");
+    assert.equal(seedInput.disabled, false);
+    assert.equal(output.textContent, "0.94");
+    assert.equal(preset.attributes["aria-pressed"], "true");
+
+    world.body = 0;
+    world.rings = true;
+    syncUi(world);
+    assert.equal(cloudInput.disabled, false);
+    assert.equal(cloudInput.field.classes.has("is-disabled"), false);
+    assert.equal(cloudInput.attributes["aria-description"], undefined);
+    assert.equal(ringInput.disabled, false);
+    assert.equal(world.clouds, 0.37, "switching body never destroys settings");
+  } finally {
+    globalThis.document = originalDocument;
+  }
+});

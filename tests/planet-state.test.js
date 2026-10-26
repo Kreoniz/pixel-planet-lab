@@ -69,3 +69,21 @@ test("does not allow unknown keys or prototype pollution through imported JSON",
   assert.equal({}.polluted, undefined);
   assert.deepEqual(Object.keys(decoded).sort(), Object.keys(state).sort());
 });
+
+test("percentage controls retain normalized values through planet codes", () => {
+  const world = {
+    ...state,
+    water: 0.42,
+    clouds: 0.37,
+    city: 0.18,
+    ringOpacity: 0.64,
+    stars: 0.92,
+    lava: 0.25,
+  };
+  assert.deepEqual(
+    Object.fromEntries(["water", "clouds", "city", "ringOpacity", "stars", "lava"].map((key) => [
+      key, decodePlanetCode(encodePlanetCode(world))[key],
+    ])),
+    Object.fromEntries(["water", "clouds", "city", "ringOpacity", "stars", "lava"].map((key) => [key, world[key]])),
+  );
+});

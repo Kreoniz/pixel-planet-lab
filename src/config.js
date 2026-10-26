@@ -99,6 +99,7 @@ export const actions = [
   ["exportSheet", "Sheet"],
   ["exportVideo", "Video"],
   ["copyCode", "Copy code"],
+  ["shareLink", "Share link"],
   ["loadCode", "Load"],
 ];
 

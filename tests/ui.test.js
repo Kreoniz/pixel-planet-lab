@@ -96,3 +96,18 @@ test("syncs percentages, labels, and disabled controls without mutating settings
     globalThis.document = originalDocument;
   }
 });
+
+test("shows shortcuts without changing the original dark editor structure", () => {
+  const root = { innerHTML: "" };
+  renderApp(root);
+  const html = root.innerHTML;
+
+  assert.match(html, /data-shortcuts-open/);
+  assert.match(html, /data-shortcuts-close/);
+  assert.match(html, /<dialog[^>]*id="shortcuts-dialog"/);
+  assert.match(html, /aria-keyshortcuts="R"/);
+  assert.match(html, /aria-keyshortcuts="Control\+S Meta\+S"/);
+  assert.match(html, /aria-keyshortcuts="9"/);
+  assert.match(html, /Shortcuts are disabled while editing an input or select/);
+  assert.doesNotMatch(html, /<nav\b/);
+});

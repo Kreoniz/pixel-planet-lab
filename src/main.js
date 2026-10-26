@@ -2,6 +2,7 @@ import "./styles.css";
 import { palettes, presets, state } from "./config.js";
 import { decodePlanetCode, encodePlanetCode, normalizePlanetState } from "./planet-state.js";
 import { renderApp, syncUi } from "./ui.js";
+import { registerEditorHotkeys } from "./hotkeys.js";
 
 renderApp(document.querySelector("#app"));
 
@@ -650,6 +651,21 @@ function bindUi() {
     });
   });
 
+  const shortcutDialog = document.querySelector("#shortcuts-dialog");
+  const toggleShortcuts = () => {
+    if (shortcutDialog.open) shortcutDialog.close();
+    else shortcutDialog.showModal();
+  };
+  document.querySelector("[data-shortcuts-open]").addEventListener("click", toggleShortcuts);
+  document.querySelector("[data-shortcuts-close]").addEventListener("click", () => shortcutDialog.close());
+
+  registerEditorHotkeys({
+    runAction: (action) => actions[action]?.(),
+    choosePreset: applyPreset,
+    toggleHelp: toggleShortcuts,
+    isHelpOpen: () => shortcutDialog.open,
+  });
+
   let draggingLight = false;
   canvas.addEventListener("pointerdown", (event) => {
     draggingLight = true;
@@ -682,6 +698,13 @@ function setLightFromPointer(event) {
 }
 
 const actions = {
+  toggleAnimation() {
+    state.animate = !state.animate;
+    lastTickSeconds = 0;
+    syncUi(state);
+    invalidate();
+    setStatus(state.animate ? "Animation resumed" : "Animation paused");
+  },
   randomize() {
     randomize();
   },

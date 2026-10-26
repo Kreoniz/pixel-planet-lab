@@ -61,8 +61,11 @@ export const state = {
   columns: 8,
   videoSeconds: 4,
   videoFps: 24,
+  sheetSeconds: 6,
   batch: 12,
 };
+
+export const defaultPlanetState = { ...state, seed: 1 };
 
 export const presetButtons = [
   ["terrestrial", "Terra"],
@@ -89,7 +92,9 @@ export const bodyOptions = [
 ];
 
 export const paletteOptions = Object.keys(palettes).map((key) => [key, title(key)]);
-export const pixelOptions = [32, 48, 64, 96, 128, 192, 256, 384, 512].map((value) => [value, `${value} px`]);
+const pixelLabels = new Map([[32, "Very chunky"], [64, "Chunky"], [96, "Retro"], [128, "Balanced"], [192, "Detailed"], [256, "Fine"], [384, "High"], [512, "Ultra"]]);
+export const pixelOptions = [32, 48, 64, 96, 128, 192, 256, 384, 512]
+  .map((value) => [value, `${value} px · ${pixelLabels.get(value) || "Classic"}`]);
 export const outputOptions = [64, 96, 128, 192, 256, 384, 512].map((value) => [value, `${value} px`]);
 
 export const actions = [
@@ -168,6 +173,7 @@ export const controlSections = [
       { key: "columns", label: "Columns", type: "number", min: 1, max: 16, step: 1, span: "half" },
       { key: "videoSeconds", label: "Video seconds", type: "number", min: 1, max: 20, step: 1, span: "half" },
       { key: "videoFps", label: "Video FPS", type: "number", min: 8, max: 60, step: 1, span: "half" },
+      { key: "sheetSeconds", label: "Sheet span (seconds)", type: "number", min: 1, max: 30, step: 1, span: "half" },
       { key: "batch", label: "Batch size", type: "number", min: 4, max: 24, step: 1 },
       { action: "exportSheet", label: "Spritesheet PNG", type: "button" },
       { action: "exportVideo", label: "Export WebM", type: "button" },
@@ -217,7 +223,8 @@ const controlHelp = {
   frames: "Number of animation frames in the exported spritesheet.",
   columns: "Column count in the exported spritesheet.",
   videoSeconds: "Length of exported WebM video.",
-  videoFps: "Frame rate of exported WebM video.",
+  videoFps: "Requested frame rate for WebM recording; the browser may not meet it.",
+  sheetSeconds: "Total simulation time sampled across spritesheet frames; not every world creates a seamless loop.",
   exportSheet: "Exports all selected animation frames as one PNG spritesheet.",
   exportVideo: "Records the current animation as a WebM video using the browser MediaRecorder.",
   copyCode: "Copies this planet configuration for later reuse.",

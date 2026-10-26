@@ -1,15 +1,16 @@
 // Loaded only after the user asks for a batch, spritesheet, or video.
 // The interactive planet preview never needs to download this module.
-export async function exportSheet({ state, canvas, draw, rotationPhase, spinSpeed, downloadCanvas, setStatus, invalidate, clampInt }) {
+import { validateSheetLayout } from "./editor-state.js";
+export async function exportSheet({ state, canvas, draw, simulationSeconds, rotationPhase, spinSpeed, downloadCanvas, setStatus, invalidate, clampInt }) {
   const size = clampInt(state.size, 64, 512);
   const frames = clampInt(state.frames, 1, 96);
   const columns = clampInt(state.columns, 1, 16);
-  const rows = Math.ceil(frames / columns);
+  const { width, height } = validateSheetLayout(size, frames, columns);
   const sheet = document.createElement("canvas");
-  sheet.width = size * columns;
-  sheet.height = size * rows;
+  sheet.width = width;
+  sheet.height = height;
   const ctx = sheet.getContext("2d");
-  const baseTime = performance.now() * 0.001;
+  const baseTime = simulationSeconds;
   const baseTurn = rotationPhase;
   const speed = spinSpeed();
 
@@ -17,7 +18,9 @@ export async function exportSheet({ state, canvas, draw, rotationPhase, spinSpee
     if (!ctx) throw new Error("Canvas 2D context unavailable");
     ctx.imageSmoothingEnabled = false;
     for (let i = 0; i < frames; i++) {
-      const offset = (i / frames) * 6.0;
+      // Frame samples cover the requested span; arbitrary shader dynamics
+      // are not guaranteed to form a mathematically seamless loop.
+      const offset = (i / frames) * Number(state.sheetSeconds);
       draw(baseTime + offset, baseTurn + offset * speed);
       ctx.drawImage(canvas, (i % columns) * size, Math.floor(i / columns) * size, size, size);
     }
@@ -31,7 +34,7 @@ export async function exportSheet({ state, canvas, draw, rotationPhase, spinSpee
   }
 }
 
-export async function exportVideo({ state, canvas, draw, rotationPhase, spinSpeed, downloadBlob, setStatus, sleep, clampInt }) {
+export async function exportVideo({ state, canvas, draw, simulationSeconds, rotationPhase, spinSpeed, downloadBlob, setStatus, sleep, clampInt }) {
   if (!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) {
     setStatus("Video export is not supported in this browser");
     return;
@@ -66,7 +69,7 @@ export async function exportVideo({ state, canvas, draw, rotationPhase, spinSpee
       ...(mimeType ? { mimeType } : {}),
       videoBitsPerSecond: 5_000_000,
     });
-    const baseTime = performance.now() * 0.001;
+    const baseTime = simulationSeconds;
     const baseTurn = rotationPhase;
     const speed = spinSpeed();
 
@@ -104,13 +107,17 @@ export async function exportVideo({ state, canvas, draw, rotationPhase, spinSpee
   }
 }
 
-export function generateBatch({ state, palettes, canvas, draw, batchStrip, syncUi, normalizeState, resizeCanvas, invalidate, setStatus, clampInt, round }) {
-  const saved = { ...state };
+export async function generateBatch({
+  state, palettes, canvas, draw, batchStrip, syncUi, normalizeState, resizeCanvas,
+  invalidate, recordEdit, setStatus, clampInt, round, simulationSeconds,
+  signal, yieldControl = () => Promise.resolve(),
+}) {
   const count = clampInt(state.batch, 4, 24);
   const thumbSize = 96;
   batchStrip.replaceChildren();
 
   for (let i = 0; i < count; i++) {
+    if (signal?.aborted) return;
     const seed = Math.floor(Math.random() * 999999) + 1;
     const batchState = {
       seed,
@@ -132,9 +139,10 @@ export function generateBatch({ state, palettes, canvas, draw, batchStrip, syncU
       moonSpeed: round(0.2 + (i % 5) * 0.14),
       moonSize: round(0.24 + (i % 4) * 0.14),
     };
-    Object.assign(state, batchState);
-    draw(performance.now() * 0.001 + i * 0.1);
 
+    // Restore the shared preview before yielding control. UI edits made while
+    // generating variations are never overwritten by stale batch state.
+    const before = { ...state };
     const item = document.createElement("button");
     item.type = "button";
     item.className = "batch-item";
@@ -142,25 +150,38 @@ export function generateBatch({ state, palettes, canvas, draw, batchStrip, syncU
     thumb.width = thumbSize;
     thumb.height = thumbSize;
     const ctx = thumb.getContext("2d");
+    if (!ctx) throw new Error("Could not render variation thumbnail");
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(canvas, 0, 0);
+    try {
+      Object.assign(state, batchState);
+      draw(simulationSeconds + i * 0.1);
+      ctx.drawImage(canvas, 0, 0);
+    } finally {
+      Object.assign(state, before);
+      resizeCanvas();
+      draw(simulationSeconds);
+    }
 
     const label = document.createElement("span");
     label.textContent = String(seed);
     item.append(thumb, label);
     item.addEventListener("click", () => {
-      Object.assign(state, saved, batchState, { size: saved.size, pixelSize: saved.pixelSize });
+      const retained = {
+        size: state.size, pixelSize: state.pixelSize, animate: state.animate,
+        frames: state.frames, columns: state.columns, videoSeconds: state.videoSeconds,
+        videoFps: state.videoFps, sheetSeconds: state.sheetSeconds, batch: state.batch,
+      };
+      Object.assign(state, batchState, retained);
       normalizeState();
       syncUi(state);
       invalidate();
-      setStatus(`Loaded batch seed ${seed}`);
+      recordEdit();
+      setStatus(`Loaded variation seed ${seed}`);
     });
     batchStrip.append(item);
+    setStatus(`Generating variations ${i + 1}/${count}`);
+    if (i % 2 === 1) await yieldControl();
   }
 
-  Object.assign(state, saved);
-  resizeCanvas();
-  syncUi(state);
-  invalidate();
-  setStatus(`Generated ${count} batch seeds`);
+  if (!signal?.aborted) setStatus(`Generated ${count} planet variations`);
 }

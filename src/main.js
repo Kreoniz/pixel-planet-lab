@@ -1,7 +1,8 @@
 import "./styles.css";
-import { palettes, presets, state } from "./config.js";
+import { palettes, presets, state, defaultPlanetState } from "./config.js";
 import { decodePlanetCode, encodePlanetCode, normalizePlanetState } from "./planet-state.js";
-import { renderApp, syncUi } from "./ui.js";
+import { renderApp, syncUi, syncEditorUi, syncTimelineUi } from "./ui.js";
+import { createHistory, createSessionStore, normalizePreferences, nextPresetState } from "./editor-state.js";
 import { registerEditorHotkeys } from "./hotkeys.js";
 
 renderApp(document.querySelector("#app"));
@@ -422,7 +423,11 @@ let recordingVideo = false;
 let previewVisible = true;
 let framePending = false;
 let lastRenderedMs = -Infinity;
-const frameIntervalMs = 1000 / 30;
+const session = createSessionStore(() => window.localStorage);
+const editorPrefs = session.loadPreferences();
+let editHistory;
+let simulationSeconds = 0;
+let batchController = null;
 const paletteVectors = Object.fromEntries(
   Object.entries(palettes).map(([name, colors]) => [name, hexPalette(colors)]),
 );
@@ -438,9 +443,24 @@ if (!gl) {
   uniforms = collectUniforms(program);
   gl.useProgram(program);
   bindUi();
+  // A shared link takes precedence over the most recently saved local world.
+  if (!new URLSearchParams(window.location.hash.slice(1)).has("planet")) {
+    const saved = session.loadPlanetCode();
+    if (saved) {
+      try {
+        Object.assign(state, decodePlanetCode(saved));
+        setStatus("Restored your previous planet");
+      } catch {
+        setStatus("Saved planet is invalid; started a new world");
+      }
+    }
+  }
   loadPlanetFromUrl();
+  editHistory = createHistory(state);
   window.addEventListener("hashchange", loadPlanetFromUrl);
   syncUi(state);
+  syncEditorUi(editorPrefs, editHistory);
+  syncTimelineUi(simulationSeconds, state.animate);
   resizeCanvas();
   requestFrame();
   document.addEventListener("visibilitychange", () => {
@@ -543,23 +563,26 @@ function tick(time) {
   if (document.hidden || !previewVisible || recordingVideo) return;
 
   // Avoid driving high-cost procedural shaders at 60–144 FPS.
-  if (state.animate && !dirty && time - lastRenderedMs < frameIntervalMs) {
+  if (state.animate && !dirty && time - lastRenderedMs < 1000 / editorPrefs.previewFps) {
     requestFrame();
     return;
   }
 
-  const timeSeconds = time * 0.001;
-  if (!lastTickSeconds) lastTickSeconds = timeSeconds;
+  const nowSeconds = time * 0.001;
+  if (!lastTickSeconds) lastTickSeconds = nowSeconds;
+  const delta = Math.max(0, Math.min(nowSeconds - lastTickSeconds, 0.1));
+  lastTickSeconds = nowSeconds;
   if (state.animate) {
-    const delta = Math.min(timeSeconds - lastTickSeconds, 0.1);
+    simulationSeconds += delta;
     rotationPhase += delta * spinSpeed();
   }
-  lastTickSeconds = timeSeconds;
 
   if (state.animate || dirty) {
-    draw(timeSeconds);
+    // All shader effects use the same simulation clock. Paused worlds cannot jump.
+    draw(simulationSeconds);
     dirty = false;
     lastRenderedMs = time;
+    syncTimelineUi(simulationSeconds, state.animate);
     if (state.animate) updateFps(time);
     else {
       fpsFrames = 0;
@@ -570,7 +593,7 @@ function tick(time) {
   if (state.animate) requestFrame();
 }
 
-function draw(timeSeconds, turn = rotationPhase) {
+function draw(timeSeconds = simulationSeconds, turn = rotationPhase) {
   resizeCanvas();
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.useProgram(program);
@@ -624,8 +647,8 @@ function resizeCanvas() {
 
 function bindUi() {
   document.querySelectorAll("[data-key]").forEach((input) => {
-    // Commit discrete controls on change, so typing "256" does not turn into
-    // "2" on the first keystroke. Only continuous sliders redraw on input.
+    // Sliders preview continuously; the final change creates one undo step.
+    // Numeric fields commit on change so the user can type multiple digits.
     const eventType = input.type === "range" ? "input" : "change";
     input.addEventListener(eventType, () => {
       if (input.disabled) return;
@@ -633,13 +656,55 @@ function bindUi() {
         syncUi(state);
         return;
       }
-
       state[input.dataset.key] = readInput(input);
       normalizeState();
       syncUi(state);
       invalidate();
+      if (eventType === "change") recordEdit();
+    });
+    if (input.type === "range") input.addEventListener("change", recordEdit);
+  });
+
+  document.querySelectorAll("[data-grid-preset]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.pixelSize = Number(button.dataset.gridPreset);
+      syncUi(state);
+      invalidate();
+      recordEdit();
     });
   });
+
+  document.querySelectorAll("[data-lock-preference]").forEach((input) => {
+    input.addEventListener("change", () => {
+      editorPrefs[input.dataset.lockPreference] = input.checked;
+      session.savePreferences(editorPrefs);
+      syncEditorUi(editorPrefs, editHistory);
+    });
+  });
+
+  document.querySelectorAll("[data-preference]").forEach((input) => {
+    input.addEventListener("input", () => {
+      Object.assign(editorPrefs, normalizePreferences({ ...editorPrefs, [input.dataset.preference]: Number(input.value) }));
+      session.savePreferences(editorPrefs);
+      syncEditorUi(editorPrefs, editHistory);
+      fpsFrames = 0;
+      fpsTime = 0;
+      invalidate();
+    });
+  });
+
+  const timeline = document.querySelector("[data-timeline]");
+  timeline.addEventListener("input", () => {
+    state.animate = false;
+    lastTickSeconds = 0;
+    const nextTime = Number(timeline.value);
+    rotationPhase += (nextTime - simulationSeconds) * spinSpeed();
+    simulationSeconds = nextTime;
+    syncUi(state);
+    syncTimelineUi(simulationSeconds, false);
+    invalidate();
+  });
+  timeline.addEventListener("change", recordEdit);
 
   document.querySelectorAll("[data-action]").forEach((button) => {
     button.addEventListener("click", () => actions[button.dataset.action]());
@@ -677,6 +742,7 @@ function bindUi() {
   });
   for (const eventName of ["pointerup", "pointercancel", "lostpointercapture"]) {
     canvas.addEventListener(eventName, () => {
+      if (draggingLight) recordEdit();
       draggingLight = false;
     });
   }
@@ -697,12 +763,61 @@ function setLightFromPointer(event) {
   invalidate();
 }
 
+function persistCurrentPlanet() {
+  session.savePlanetCode(encodePlanetCode(state));
+}
+
+function recordEdit() {
+  if (editHistory?.commit(state)) {
+    batchController?.abort();
+    persistCurrentPlanet();
+    syncEditorUi(editorPrefs, editHistory);
+  }
+}
+
+function restoreHistory(direction) {
+  const next = editHistory?.[direction]();
+  if (!next) return;
+  batchController?.abort();
+  Object.assign(state, next);
+  normalizeState();
+  syncUi(state);
+  syncEditorUi(editorPrefs, editHistory);
+  persistCurrentPlanet();
+  invalidate();
+  setStatus(direction === "undo" ? "Undid change" : "Redid change");
+}
+
+function seekSimulation(seconds) {
+  const next = Math.max(0, Math.min(60, seconds));
+  rotationPhase += (next - simulationSeconds) * spinSpeed();
+  simulationSeconds = next;
+  state.animate = false;
+  lastTickSeconds = 0;
+  syncUi(state);
+  syncTimelineUi(simulationSeconds, false);
+  invalidate();
+  recordEdit();
+}
+
 const actions = {
+  undo() { restoreHistory("undo"); },
+  redo() { restoreHistory("redo"); },
+  stepBack() { seekSimulation(simulationSeconds - 1 / editorPrefs.previewFps); },
+  stepForward() { seekSimulation(simulationSeconds + 1 / editorPrefs.previewFps); },
+  rerollSeed() {
+    state.seed = Math.floor(Math.random() * 999999) + 1;
+    syncUi(state);
+    invalidate();
+    recordEdit();
+    setStatus(`New seed ${state.seed} (all other settings kept)`);
+  },
   toggleAnimation() {
     state.animate = !state.animate;
     lastTickSeconds = 0;
     syncUi(state);
     invalidate();
+    recordEdit();
     setStatus(state.animate ? "Animation resumed" : "Animation paused");
   },
   randomize() {
@@ -713,7 +828,7 @@ const actions = {
   },
   async exportPng() {
     try {
-      draw(performance.now() * 0.001);
+      draw(simulationSeconds);
       await downloadCanvas(exportCanvas(), `planet-${state.seed}.png`);
       setStatus(`Exported PNG ${state.size}x${state.size} from ${renderSize()}px grid`);
     } catch (error) {
@@ -759,6 +874,7 @@ function applyPlanetCode(code) {
   normalizeState();
   syncUi(state);
   invalidate();
+  recordEdit();
 }
 
 function loadPlanetFromUrl() {
@@ -773,11 +889,14 @@ function loadPlanetFromUrl() {
 }
 
 function applyPreset(name) {
-  Object.assign(state, presets[name]);
-  state.seed = Math.floor(Math.random() * 999999) + 1;
+  const preset = presets[name];
+  if (!preset) return;
+  const seed = Math.floor(Math.random() * 999999) + 1;
+  Object.assign(state, nextPresetState(state, defaultPlanetState, preset, seed));
   normalizeState();
   syncUi(state);
   invalidate();
+  recordEdit();
   setStatus(`${name} preset`);
 }
 
@@ -785,9 +904,14 @@ function randomize() {
   const seed = Math.floor(Math.random() * 999999) + 1;
   const rng = mulberry32(seed);
   const keys = Object.keys(presets);
-  Object.assign(state, presets[keys[Math.floor(rng() * keys.length)]]);
-  state.seed = seed;
-  state.palette = Object.keys(palettes)[Math.floor(rng() * Object.keys(palettes).length)];
+  const previousPalette = state.palette;
+  const choice = editorPrefs.lockType
+    ? Object.values(presets).find((p) => Number(p.body) === Number(state.body)) || presets.terrestrial
+    : presets[keys[Math.floor(rng() * keys.length)]];
+  Object.assign(state, nextPresetState(state, defaultPlanetState, choice, seed));
+  state.palette = editorPrefs.lockPalette
+    ? previousPalette
+    : Object.keys(palettes)[Math.floor(rng() * Object.keys(palettes).length)];
   state.zoom = round(0.82 + rng() * 0.24);
   state.spin = round(0.08 + rng() * 0.58);
   state.terrain = round(rng());
@@ -814,6 +938,7 @@ function randomize() {
   normalizeState();
   syncUi(state);
   invalidate();
+  recordEdit();
   setStatus(`Random seed ${state.seed}`);
 }
 
@@ -826,27 +951,37 @@ function mutate() {
   normalizeState();
   syncUi(state);
   invalidate();
+  recordEdit();
   setStatus(`Mutated seed ${state.seed}`);
 }
 
 // Optional tools form a separate chunk and are fetched only on first use.
 async function runExtra(action) {
   if (recordingVideo || !gl) return;
-  if (action === "exportVideo") recordingVideo = true;
+  const isVideo = action === "exportVideo";
+  const isBatch = action === "generateBatch";
+  if (isVideo) recordingVideo = true;
+  if (isBatch) batchController?.abort();
+  const controller = isBatch ? new AbortController() : null;
+  if (controller) batchController = controller;
 
   try {
     const extra = await import("./extra-actions.js");
+    if (controller?.signal.aborted) return;
     await extra[action]({
       state, palettes, canvas, draw, batchStrip,
-      rotationPhase, spinSpeed, downloadCanvas, downloadBlob,
-      syncUi, normalizeState, resizeCanvas, invalidate,
+      simulationSeconds, rotationPhase, spinSpeed, downloadCanvas, downloadBlob,
+      syncUi, normalizeState, resizeCanvas, invalidate, recordEdit,
       setStatus, clampInt, round, sleep,
+      signal: controller?.signal,
+      yieldControl: () => new Promise((resolve) => setTimeout(resolve, 0)),
     });
   } catch (error) {
-    const label = action === "generateBatch" ? "Variations" : action === "exportSheet" ? "Sheet export" : "Video export";
-    setStatus(`${label} failed: ${error?.message || "unknown error"}`);
+    const label = isBatch ? "Variations" : action === "exportSheet" ? "Sheet export" : "Video export";
+    if (!controller?.signal.aborted) setStatus(`${label} failed: ${error?.message || "unknown error"}`);
   } finally {
-    recordingVideo = false;
+    if (isVideo) recordingVideo = false;
+    if (isBatch && batchController === controller) batchController = null;
     invalidate();
   }
 }
@@ -935,7 +1070,7 @@ function updateFps(time) {
   if (!fpsTime) fpsTime = time;
   if (time - fpsTime >= 500) {
     const fps = Math.round((fpsFrames * 1000) / (time - fpsTime));
-    fpsEl.textContent = `${fps} fps`;
+    fpsEl.textContent = `${fps} / ${editorPrefs.previewFps} fps`;
     fpsFrames = 0;
     fpsTime = time;
   }

@@ -111,3 +111,18 @@ test("shows shortcuts without changing the original dark editor structure", () =
   assert.match(html, /Shortcuts are disabled while editing an input or select/);
   assert.doesNotMatch(html, /<nav\b/);
 });
+
+test("adds compact FPS, resolution, history, and timeline controls", () => {
+  const root = { innerHTML: "" };
+  renderApp(root);
+  const html = root.innerHTML;
+  for (const target of [
+    'data-preference="previewFps"', 'data-grid-preset="64"',
+    'data-grid-preset="128"', 'data-grid-preset="256"',
+    'data-pixel-scale', 'data-lock-preference="lockType"',
+    'data-lock-preference="lockPalette"', 'data-action="undo"',
+    'data-action="redo"', 'data-action="rerollSeed"', 'data-timeline',
+    'data-playhead',
+  ]) assert.ok(html.includes(target), `Missing ${target}`);
+  assert.doesNotMatch(html, /<nav\\b|class="site-header"/);
+});

@@ -75,3 +75,30 @@ Press **?** in the editor (or click its small **?** button) for the complete lis
 
 `Mod` is **Ctrl** on Linux/Windows and **Command** on macOS.
 Shortcuts do not run while focus is in a text/number input, select, or other editable field. This uses the framework-independent `@tanstack/hotkeys` core; no new framework or devtools bundle is required.
+
+## Rendering and experimentation
+
+**Preview FPS** is a target (5–60 FPS), not a promise of hardware throughput.
+It affects only the current editor; WebM export uses its own requested FPS.
+Pausing freezes all shader effects at the same simulation timestamp. Scrub the
+compact 60-second timeline or step one frame backward/forward to inspect motion.
+
+**Pixel grid** is the internal shader resolution; **Output** is exported PNG
+resolution. Use Chunky / Balanced / Fine buttons, or the complete size menu.
+The editor warns when scaling isn't an integer multiple (uneven pixel widths)
+or when output is downscaled.
+
+**Undo / Redo** work for parameter changes, presets, randomization, seed-only
+rerolls, and light dragging. Use `Ctrl/Cmd+Z` and `Ctrl/Cmd+Shift+Z`.
+The last planet is saved locally, restoring automatically next time unless a
+shared planet URL is supplied. Editor-only FPS and type/palette locks are stored
+separately; share links remain portable.
+
+**Random** can keep planet type and/or palette via Lock toggles. **Seed ↻**
+changes only the seed without changing any other parameters (`Shift+R`).
+Switching presets resets stale world-specific effects but retains export settings.
+
+**Spritesheets** now sample a configurable time span; procedural planets are not
+guaranteed to loop seamlessly. Browser-safe canvas dimension checks fail with an
+actionable message before allocating huge sheets. Batch variations are generated
+incrementally and can be interrupted by subsequent editing.

@@ -56,3 +56,9 @@ test("registers TanStack handlers with input-safe and non-repeating behavior", (
   unregister();
   assert.equal(bindings.size, 0);
 });
+
+test("history shortcuts use platform modifier keys", () => {
+  assert.equal(actionShortcuts.undo, "Mod+Z");
+  assert.equal(actionShortcuts.redo, "Mod+Shift+Z");
+  assert.equal(actionShortcuts.rerollSeed, "Shift+R");
+});

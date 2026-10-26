@@ -1,5 +1,6 @@
 export default {
-  base: "./",
+  // Project Pages is hosted at https://kreoniz.github.io/pixel-planet-lab/.
+  base: "/pixel-planet-lab/",
   build: {
     target: "es2020",
     minify: "esbuild",

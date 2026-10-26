@@ -1,10 +1,14 @@
 import { controlSections, presetButtons, presets } from "./config.js";
 import { controlAvailability } from "./control-availability.js";
 import { shortcuts, actionShortcuts, presetShortcuts, displayShortcut } from "./hotkeys.js";
+import { pixelScaleInfo } from "./editor-state.js";
 
 const toolbarActions = [
   ["randomize", "Random", "primary"],
   ["mutate", "Mutate", ""],
+  ["rerollSeed", "Seed ↻", ""],
+  ["undo", "↶", ""],
+  ["redo", "↷", ""],
   ["exportPng", "PNG", ""],
   ["shareLink", "Share", ""],
 ];
@@ -31,7 +35,13 @@ export function renderApp(root) {
           <canvas id="planetCanvas" width="128" height="128" aria-label="Generated pixel planet. Drag to move the light."></canvas>
         </div>
         <div class="preview-meta">
-          <span>Drag to move light</span>
+          <span class="preview-drag-hint">Drag to move light</span>
+          <div class="timeline" role="group" aria-label="Simulation time">
+            <button type="button" data-action="stepBack" aria-label="Step backward one frame" title="Previous frame">‹</button>
+            <input type="range" data-timeline min="0" max="60" step="0.1" value="0" aria-label="Simulation time in seconds" />
+            <button type="button" data-action="stepForward" aria-label="Step forward one frame" title="Next frame">›</button>
+            <output data-playhead>0.0s</output>
+          </div>
           <span id="fps" aria-label="Frame rate">—</span>
         </div>
 
@@ -130,6 +140,38 @@ export function syncUi(state) {
   document.querySelectorAll("[data-preset]").forEach((button) => {
     button.setAttribute("aria-pressed", String(presets[button.dataset.preset]?.body === state.body));
   });
+  document.querySelectorAll("[data-grid-preset]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(Number(button.dataset.gridPreset) === Number(state.pixelSize)));
+  });
+  const hint = document.querySelector?.("[data-pixel-scale]");
+  if (hint) {
+    const scale = pixelScaleInfo(Number(state.pixelSize), Number(state.size));
+    hint.textContent = scale.text;
+    hint.dataset.tone = scale.tone;
+  }
+}
+
+export function syncEditorUi(preferences, { canUndo = false, canRedo = false } = {}) {
+  const fps = document.querySelector?.('[data-preference="previewFps"]');
+  if (fps) fps.value = String(preferences.previewFps);
+  const fpsLabel = document.querySelector?.("[data-fps-target]");
+  if (fpsLabel) fpsLabel.textContent = `${preferences.previewFps} FPS`;
+  document.querySelectorAll("[data-lock-preference]").forEach((input) => {
+    input.checked = Boolean(preferences[input.dataset.lockPreference]);
+  });
+  const undo = document.querySelector?.('[data-action="undo"]');
+  const redo = document.querySelector?.('[data-action="redo"]');
+  if (undo) undo.disabled = !canUndo;
+  if (redo) redo.disabled = !canRedo;
+}
+
+export function syncTimelineUi(seconds, isPlaying) {
+  const scrub = document.querySelector?.("[data-timeline]");
+  if (scrub && document.activeElement !== scrub)
+    scrub.value = String(seconds % 60);
+  const label = document.querySelector?.("[data-playhead]");
+  if (label) label.textContent = `${seconds.toFixed(1)}s`;
+  if (scrub) scrub.setAttribute("aria-valuetext", `${seconds.toFixed(1)} seconds, ${isPlaying ? "playing" : "paused"}`);
 }
 
 function sectionTemplate(section) {
@@ -142,6 +184,11 @@ function sectionTemplate(section) {
       </summary>
       <div class="control-grid">
         ${section.controls.map(controlTemplate).join("")}
+        ${section.title === "World" ? `<label class="field field-range control-wide" title="Target animation frame rate, not a guarantee of GPU performance">
+          <span class="field-label">Preview FPS target</span>
+          <output data-fps-target>30 FPS</output>
+          <input data-preference="previewFps" type="range" min="5" max="60" step="5" />
+        </label>` : ""}
       </div>
     </details>
   `;
@@ -164,13 +211,28 @@ function controlTemplate(control) {
   }
 
   if (control.type === "select") {
+    const lockKey = key === "body" ? "lockType" : key === "palette" ? "lockPalette" : null;
+    const lock = lockKey ? `<label class="lock-option" title="Keep this setting when choosing Random">
+      <input type="checkbox" data-lock-preference="${lockKey}" /> Lock
+    </label>` : "";
+    const quick = key === "pixelSize"
+      ? `<div class="grid-quick" role="group" aria-label="Pixel detail presets">
+          <button type="button" data-grid-preset="64">Chunky</button>
+          <button type="button" data-grid-preset="128">Balanced</button>
+          <button type="button" data-grid-preset="256">Fine</button>
+         </div><small data-pixel-scale aria-live="polite"></small>`
+      : "";
     return `
-      <label class="field" ${common}>
-        <span class="field-label">${control.label}</span>
-        <select data-key="${key}">
-          ${control.options.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}
-        </select>
-      </label>`;
+      <div class="field ${key === "pixelSize" ? "control-wide" : ""}" ${common}>
+        <label class="field-label" for="field-${key}">${control.label}</label>
+        <div class="select-row">
+          <select id="field-${key}" data-key="${key}">
+            ${control.options.map(([value, label]) => `<option value="${value}">${label}</option>`).join("")}
+          </select>
+          ${lock}
+        </div>
+        ${quick}
+      </div>`;
   }
 
   if (control.type === "number") {

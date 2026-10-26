@@ -5,6 +5,9 @@ import { presetButtons } from "./config.js";
 export const shortcuts = [
   { id: "randomize", hotkey: "R", label: "Random planet", group: "Actions", action: "randomize" },
   { id: "mutate", hotkey: "M", label: "Mutate planet", group: "Actions", action: "mutate" },
+  { id: "rerollSeed", hotkey: "Shift+R", label: "New seed (keep settings)", group: "Actions", action: "rerollSeed" },
+  { id: "undo", hotkey: "Mod+Z", label: "Undo", group: "Actions", action: "undo" },
+  { id: "redo", hotkey: "Mod+Shift+Z", label: "Redo", group: "Actions", action: "redo" },
   { id: "animate", hotkey: "A", label: "Toggle animation", group: "Actions", action: "toggleAnimation" },
   { id: "export", hotkey: "Mod+S", label: "Download PNG", group: "Actions", action: "exportPng" },
   { id: "share", hotkey: "Mod+Shift+L", label: "Copy share link", group: "Actions", action: "shareLink" },

@@ -8,7 +8,7 @@ export function renderApp(root) {
           <div class="brand-block">
             <span class="eyebrow">Shader planet forge</span>
             <h1>Pixel Planet Lab</h1>
-            <p id="status">WebGL renderer ready</p>
+            <p id="status" role="status" aria-live="polite">WebGL renderer ready</p>
           </div>
           <div class="toolbar" aria-label="Actions">
             ${actions.map(([action, label]) => `<button type="button" data-action="${action}">${label}</button>`).join("")}

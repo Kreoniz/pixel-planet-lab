@@ -1,5 +1,6 @@
 import "./styles.css";
 import { palettes, presets, state } from "./config.js";
+import { decodePlanetCode, encodePlanetCode, normalizePlanetState } from "./planet-state.js";
 import { renderApp, syncUi } from "./ui.js";
 
 renderApp(document.querySelector("#app"));
@@ -15,14 +16,7 @@ const gl = canvas.getContext("webgl2", {
 const statusEl = document.querySelector("#status");
 const fpsEl = document.querySelector("#fps");
 const batchStrip = document.querySelector("#batchStrip");
-const fallbackState = {
-  moonSpread: 0.42,
-  moonTilt: 0.38,
-  moonSpeed: 0.35,
-  moonSize: 0.45,
-  videoSeconds: 4,
-  videoFps: 24,
-};
+
 
 const vertexSource = `#version 300 es
 precision highp float;
@@ -168,7 +162,7 @@ Surface rockySurface(vec3 p) {
   float waterLine = clamp(uWater, 0.03, 0.95);
   float shore = smoothstep(waterLine - 0.04, waterLine + 0.035, h);
   float coast = smoothstep(waterLine - 0.025, waterLine + 0.02, h) * (1.0 - smoothstep(waterLine + 0.025, waterLine + 0.09, h));
-  float high = smoothstep(waterLine + 0.08, 1.0, h);
+  float high = smoothstep(min(waterLine + 0.08, 0.99), 1.0, h);
   float mountain = smoothstep(0.62, 0.98, h);
   float moisture = fbm(p * 5.2 + vec3(uSeed * 0.31, 4.0, 0.0));
   float iceCap = clamp(smoothstep(0.48, 0.94, abs(p.y) + uIce * 0.46) + smoothstep(0.8, 1.0, h) * uIce * 0.45, 0.0, 1.0);
@@ -285,7 +279,7 @@ Ring getRing(vec2 uv, float radius) {
   float grooves = mix(1.0, smoothstep(0.16, 0.86, grooveWave), uRingGaps);
   float dust = 0.82 + 0.18 * hash12(floor(plane * (54.0 + detail)) + uSeed);
   float mask = band * lanes * grooves * dust * uRingOpacity;
-  float front = smoothstep(0.055, -0.055, screen.y);
+  float front = 1.0 - smoothstep(-0.055, 0.055, screen.y);
   vec3 color = mix(uPalette[1], uPalette[4], smoothstep(inner, outer, d));
   color = mix(color, uPalette[5], lanes * 0.16);
   return Ring(mask, front, color);
@@ -360,7 +354,7 @@ void main() {
 
     Surface surf = getSurface(p);
     float lit = clamp(dot(normal, light), 0.0, 1.0);
-    float night = smoothstep(0.34, -0.16, lit);
+    float night = 1.0 - smoothstep(-0.16, 0.34, lit);
     float rim = pow(1.0 - normal.z, 2.2);
 
     if (uBody != 7) {
@@ -381,7 +375,7 @@ void main() {
     if (uClouds > 0.0 && uBody != 1 && uBody != 7 && uBody != 8) {
       vec3 cp = rotateY(normal, turn * 1.12 + uTime * uCloudSpeed * 0.25);
       float cloud = fbm(cp * (5.0 + uRoughness * 13.0) + vec3(0.0, uSeed, uTime * uCloudSpeed * 0.18));
-      float mask = smoothstep(1.0 - uClouds * 0.72, 0.98, cloud);
+      float mask = smoothstep(1.0 - uClouds * 0.72, 1.0, cloud);
       vec3 cloudColor = mix(vec3(0.78), uPalette[4], 0.35) * (0.42 + lit * 0.78);
       color = mix(color, cloudColor, mask * (0.25 + uClouds * 0.5));
     }
@@ -397,7 +391,7 @@ void main() {
   }
 
   if (d > radius) {
-    float halo = smoothstep(radius * (1.28 + uAtmosphere * 0.25), radius, d);
+    float halo = 1.0 - smoothstep(radius, radius * (1.28 + uAtmosphere * 0.25), d);
     float starBoost = step(6.5, float(uBody));
     color += uPalette[5] * halo * uAtmosphere * (0.16 + starBoost * 0.52);
   }
@@ -429,9 +423,11 @@ if (!gl) {
   uniforms = collectUniforms(program);
   gl.useProgram(program);
   bindUi();
+  loadPlanetFromUrl();
+  window.addEventListener("hashchange", loadPlanetFromUrl);
   syncUi(state);
   resizeCanvas();
-  generateBatch();
+  generateBatch({ announce: false });
   requestAnimationFrame(tick);
 }
 
@@ -630,10 +626,14 @@ const actions = {
   mutate() {
     mutate();
   },
-  exportPng() {
-    draw(performance.now() * 0.001);
-    downloadCanvas(exportCanvas(), `planet-${state.seed}.png`);
-    setStatus(`Exported PNG ${state.size}x${state.size} from ${renderSize()}px grid`);
+  async exportPng() {
+    try {
+      draw(performance.now() * 0.001);
+      await downloadCanvas(exportCanvas(), `planet-${state.seed}.png`);
+      setStatus(`Exported PNG ${state.size}x${state.size} from ${renderSize()}px grid`);
+    } catch (error) {
+      setStatus(`PNG export failed: ${error?.message || "unknown error"}`);
+    }
   },
   exportSheet() {
     exportSheet();
@@ -642,16 +642,23 @@ const actions = {
     exportVideo();
   },
   copyCode() {
-    copyText(serializeState());
+    copyText(serializeState(), "Copied planet code");
+  },
+  shareLink() {
+    const url = new URL(window.location.href);
+    url.hash = `planet=${encodePlanetCode(state, { urlSafe: true })}`;
+    copyText(url.toString(), "Copied shareable planet link");
   },
   loadCode() {
-    const code = prompt("Planet code");
-    if (!code) return;
+    const input = prompt("Paste planet code or share link");
+    if (!input) return;
+
     try {
-      Object.assign(state, JSON.parse(atob(code)));
-      normalizeState();
-      syncUi(state);
-      dirty = true;
+      let code = input.trim();
+      if (/^https?:\/\//i.test(code)) {
+        code = new URLSearchParams(new URL(code).hash.slice(1)).get("planet");
+      }
+      applyPlanetCode(code);
       setStatus("Loaded planet code");
     } catch {
       setStatus("Could not load planet code");
@@ -661,6 +668,24 @@ const actions = {
     generateBatch();
   },
 };
+
+function applyPlanetCode(code) {
+  Object.assign(state, decodePlanetCode(code));
+  normalizeState();
+  syncUi(state);
+  dirty = true;
+}
+
+function loadPlanetFromUrl() {
+  const code = new URLSearchParams(window.location.hash.slice(1)).get("planet");
+  if (!code) return;
+  try {
+    applyPlanetCode(code);
+    setStatus("Loaded shared planet");
+  } catch {
+    setStatus("Invalid planet link");
+  }
+}
 
 function applyPreset(name) {
   Object.assign(state, presets[name]);
@@ -719,30 +744,35 @@ function mutate() {
   setStatus(`Mutated seed ${state.seed}`);
 }
 
-function exportSheet() {
+async function exportSheet() {
   const size = clampInt(state.size, 64, 512);
   const frames = clampInt(state.frames, 1, 96);
   const columns = clampInt(state.columns, 1, 16);
   const rows = Math.ceil(frames / columns);
   const sheet = document.createElement("canvas");
+  sheet.width = size * columns;
+  sheet.height = size * rows;
   const ctx = sheet.getContext("2d");
   const baseTime = performance.now() * 0.001;
   const baseTurn = rotationPhase;
   const speed = spinSpeed();
 
-  sheet.width = size * columns;
-  sheet.height = size * rows;
-  ctx.imageSmoothingEnabled = false;
+  try {
+    if (!ctx) throw new Error("Canvas 2D context unavailable");
+    ctx.imageSmoothingEnabled = false;
+    for (let i = 0; i < frames; i++) {
+      const offset = (i / frames) * 6.0;
+      draw(baseTime + offset, baseTurn + offset * speed);
+      ctx.drawImage(canvas, (i % columns) * size, Math.floor(i / columns) * size, size, size);
+    }
 
-  for (let i = 0; i < frames; i++) {
-    const offset = (i / frames) * 6.0;
-    draw(baseTime + offset, baseTurn + offset * speed);
-    ctx.drawImage(canvas, (i % columns) * size, Math.floor(i / columns) * size, size, size);
+    await downloadCanvas(sheet, `planet-${state.seed}-sheet.png`);
+    setStatus(`Exported ${frames} frame sheet`);
+  } catch (error) {
+    setStatus(`Sheet export failed: ${error?.message || "unknown error"}`);
+  } finally {
+    dirty = true;
   }
-
-  downloadCanvas(sheet, `planet-${state.seed}-sheet.png`);
-  dirty = true;
-  setStatus(`Exported ${frames} frame sheet`);
 }
 
 async function exportVideo() {
@@ -753,65 +783,76 @@ async function exportVideo() {
   }
 
   recordingVideo = true;
-  const size = clampInt(state.size, 64, 512);
-  const seconds = clampInt(state.videoSeconds, 1, 20);
-  const fps = clampInt(state.videoFps, 8, 60);
-  const totalFrames = seconds * fps;
-  const output = document.createElement("canvas");
-  const ctx = output.getContext("2d");
-  const stream = output.captureStream(fps);
-  const track = stream.getVideoTracks()[0];
-  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
-    ? "video/webm;codecs=vp9"
-    : MediaRecorder.isTypeSupported("video/webm")
-      ? "video/webm"
-      : "";
-  const chunks = [];
-  const recorder = new MediaRecorder(stream, {
-    ...(mimeType ? { mimeType } : {}),
-    videoBitsPerSecond: 5_000_000,
-  });
-  const baseTime = performance.now() * 0.001;
-  const baseTurn = rotationPhase;
-  const speed = spinSpeed();
-
-  output.width = size;
-  output.height = size;
-  ctx.imageSmoothingEnabled = false;
-  recorder.ondataavailable = (event) => {
-    if (event.data.size) chunks.push(event.data);
-  };
-
-  const done = new Promise((resolve, reject) => {
-    recorder.onstop = resolve;
-    recorder.onerror = () => reject(recorder.error);
-  });
-
+  let stream;
+  let recorder;
   try {
+    const size = clampInt(state.size, 64, 512);
+    const seconds = clampInt(state.videoSeconds, 1, 20);
+    const fps = clampInt(state.videoFps, 8, 60);
+    const totalFrames = seconds * fps;
+    const output = document.createElement("canvas");
+    output.width = size;
+    output.height = size;
+    const ctx = output.getContext("2d");
+    if (!ctx) throw new Error("Canvas 2D context unavailable");
+    ctx.imageSmoothingEnabled = false;
+
+    // Configure dimensions before creating the stream, so the exported
+    // video does not inherit the canvas's default 300x150 resolution.
+    stream = output.captureStream(fps);
+    const track = stream.getVideoTracks()[0];
+    if (!track) throw new Error("Could not create video track");
+    const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+      ? "video/webm;codecs=vp9"
+      : MediaRecorder.isTypeSupported("video/webm")
+        ? "video/webm"
+        : "";
+    const chunks = [];
+    recorder = new MediaRecorder(stream, {
+      ...(mimeType ? { mimeType } : {}),
+      videoBitsPerSecond: 5_000_000,
+    });
+    const baseTime = performance.now() * 0.001;
+    const baseTurn = rotationPhase;
+    const speed = spinSpeed();
+
+    recorder.ondataavailable = (event) => {
+      if (event.data.size) chunks.push(event.data);
+    };
+
+    const done = new Promise((resolve, reject) => {
+      recorder.onstop = resolve;
+      recorder.onerror = () => reject(recorder.error || new Error("Recorder error"));
+    });
+
     recorder.start();
     for (let i = 0; i < totalFrames; i++) {
       const offset = i / fps;
       draw(baseTime + offset, baseTurn + offset * speed);
       ctx.drawImage(canvas, 0, 0, size, size);
       if (track.requestFrame) track.requestFrame();
-      setStatus(`Recording video ${i + 1}/${totalFrames}`);
+      if (i % Math.max(1, Math.floor(fps / 2)) === 0) {
+        setStatus(`Recording video ${i + 1}/${totalFrames}`);
+      }
       await sleep(1000 / fps);
     }
 
     recorder.stop();
     await done;
+    if (!chunks.length) throw new Error("Recorder produced no video");
     downloadBlob(new Blob(chunks, { type: mimeType || "video/webm" }), `planet-${state.seed}.webm`);
     setStatus(`Exported ${seconds}s WebM at ${fps} fps`);
   } catch (error) {
     setStatus(`Video export failed: ${error?.message || "unknown error"}`);
   } finally {
-    stream.getTracks().forEach((nextTrack) => nextTrack.stop());
+    if (recorder?.state === "recording") recorder.stop();
+    stream?.getTracks().forEach((track) => track.stop());
     recordingVideo = false;
     dirty = true;
   }
 }
 
-function generateBatch() {
+function generateBatch({ announce = true } = {}) {
   if (!gl) return;
   const saved = { ...state };
   const count = clampInt(state.batch, 4, 24);
@@ -870,25 +911,11 @@ function generateBatch() {
   resizeCanvas();
   syncUi(state);
   dirty = true;
-  setStatus(`Generated ${count} batch seeds`);
+  if (announce) setStatus(`Generated ${count} batch seeds`);
 }
 
 function normalizeState() {
-  state.seed = clampInt(state.seed, 1, 999999);
-  state.size = clampInt(state.size, 64, 512);
-  state.pixelSize = clampInt(state.pixelSize ?? state.size, 32, 512);
-  state.body = clampInt(state.body, 0, 8);
-  state.frames = clampInt(state.frames, 1, 96);
-  state.columns = clampInt(state.columns, 1, 16);
-  state.moonSpread = finiteClamp(state.moonSpread, fallbackState.moonSpread, 0, 1);
-  state.moonTilt = finiteClamp(state.moonTilt, fallbackState.moonTilt, 0, 1);
-  state.moonSpeed = finiteClamp(state.moonSpeed, fallbackState.moonSpeed, 0, 1);
-  state.moonSize = finiteClamp(state.moonSize, fallbackState.moonSize, 0, 1);
-  state.videoSeconds = clampInt(finiteValue(state.videoSeconds, fallbackState.videoSeconds), 1, 20);
-  state.videoFps = clampInt(finiteValue(state.videoFps, fallbackState.videoFps), 8, 60);
-  state.batch = clampInt(state.batch, 4, 24);
-  state.moons = clampInt(state.moons, 0, 8);
-  if (!palettes[state.palette]) state.palette = "aurora";
+  Object.assign(state, normalizePlanetState(state));
 }
 
 function renderSize() {
@@ -919,30 +946,47 @@ function hexPalette(colors) {
 }
 
 function serializeState() {
-  return btoa(JSON.stringify(state));
+  return encodePlanetCode(state);
 }
 
-async function copyText(text) {
+async function copyText(value, successMessage) {
   try {
-    await navigator.clipboard.writeText(text);
-    setStatus("Copied planet code");
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+    await navigator.clipboard.writeText(value);
+    setStatus(successMessage);
   } catch {
-    setStatus(text);
+    prompt("Copy to clipboard", value);
+    setStatus("Clipboard unavailable; copy from the dialog");
   }
 }
 
 function downloadCanvas(sourceCanvas, filename) {
-  sourceCanvas.toBlob((blob) => {
-    downloadBlob(blob, filename);
-  }, "image/png");
+  return new Promise((resolve, reject) => {
+    sourceCanvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error("Could not encode PNG"));
+        return;
+      }
+      try {
+        downloadBlob(blob, filename);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    }, "image/png");
+  });
 }
 
 function downloadBlob(blob, filename) {
   const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
+  const objectUrl = URL.createObjectURL(blob);
+  link.href = objectUrl;
   link.download = filename;
+  document.body.append(link);
   link.click();
-  URL.revokeObjectURL(link.href);
+  link.remove();
+  // Revoking immediately can cancel downloads in some browsers.
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
 }
 
 function sleep(ms) {
@@ -979,15 +1023,6 @@ function clamp(value, min, max) {
 
 function clampInt(value, min, max) {
   return Math.round(clamp(value, min, max));
-}
-
-function finiteValue(value, fallback) {
-  const nextValue = Number(value);
-  return Number.isFinite(nextValue) ? nextValue : fallback;
-}
-
-function finiteClamp(value, fallback, min, max) {
-  return clamp(finiteValue(value, fallback), min, max);
 }
 
 function round(value) {

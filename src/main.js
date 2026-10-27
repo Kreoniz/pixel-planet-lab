@@ -1,9 +1,12 @@
 import "./styles.css";
 import { palettes, presets, state, defaultPlanetState } from "./config.js";
 import { decodePlanetCode, encodePlanetCode, normalizePlanetState } from "./planet-state.js";
-import { renderApp, syncUi, syncEditorUi, syncTimelineUi } from "./ui.js";
+import { renderApp, syncUi, syncEditorUi, syncTimelineUi, syncExportUi, syncAnimationUi } from "./ui.js";
+import { createAnimationStore, normalizeAnimationSettings, animationSummary } from "./animation-settings.js";
+import { chooseExportPreset, updateExportOption, createExportOptionStore } from "./export-options.js";
 import { createHistory, createSessionStore, normalizePreferences, nextPresetState } from "./editor-state.js";
 import { registerEditorHotkeys } from "./hotkeys.js";
+import { installMissingChunkRecovery } from "./missing-chunk-recovery.js";
 
 renderApp(document.querySelector("#app"));
 
@@ -16,6 +19,30 @@ const gl = canvas.getContext("webgl2", {
 });
 
 const statusEl = document.querySelector("#status");
+
+// An older tab can survive a Cloudflare Pages preview deployment. Vite
+// dispatches vite:preloadError when it tries to import a now-missing chunk.
+// Reload once onto the new deployment, or show a safe manual recovery action.
+installMissingChunkRecovery(window, {
+  buildId: import.meta.url,
+  onFailure() {
+    // Keep this recovery action outside #status: an awaiting export's catch
+    // handler may update #status after Vite emits the preload error.
+    if (document.querySelector("[data-refresh-preview-notice]")) return;
+    const notice = document.createElement("div");
+    notice.dataset.refreshPreviewNotice = "";
+    notice.className = "reload-preview-notice";
+    notice.setAttribute("role", "alert");
+    notice.append(document.createTextNode("Preview assets have changed. "));
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.refreshPreview = "";
+    button.textContent = "Reload preview";
+    button.addEventListener("click", () => window.location.reload());
+    notice.append(button);
+    statusEl.after(notice);
+  },
+});
 const fpsEl = document.querySelector("#fps");
 const batchStrip = document.querySelector("#batchStrip");
 
@@ -71,6 +98,15 @@ uniform float uMoonSpread;
 uniform float uMoonTilt;
 uniform float uMoonSpeed;
 uniform float uMoonSize;
+
+// Scene-composition flags apply to offscreen exports only. The preview always
+// draws the full opaque scene using defaults supplied by draw().
+uniform float uExportTransparent;
+uniform float uExportMoons;
+uniform float uExportRings;
+uniform float uExportGlow;
+uniform float uExportStars;
+uniform float uExportLoop;
 
 struct Surface {
   vec3 color;
@@ -363,13 +399,13 @@ vec3 background(vec2 uv) {
   vec3 color = vec3(0.016, 0.022, 0.029);
   float grid = hash12(floor(gl_FragCoord.xy) + uSeed);
   float density = (uBody == 0 || uBody == 4) ? 0.45 : 1.0;
-  float star = step(1.0 - uStars * density * 0.012, grid);
+  float star = step(1.0 - uStars * density * 0.012, grid) * uExportStars;
   float bright = step(1.0 - uStars * density * 0.002,
-      hash12(floor(gl_FragCoord.xy / 2.0) + uSeed * 7.0));
+      hash12(floor(gl_FragCoord.xy / 2.0) + uSeed * 7.0)) * uExportStars;
   color += star * vec3(0.54, 0.65, 0.72);
   color += bright * mix(vec3(0.58, 0.71, 0.84), uPalette[5], 0.33) * 0.60;
 
-  if (uBody == 8) {
+  if (uBody == 8 && uExportRings > 0.5) {
     Ring disk = getRing(uv, 0.46);
     color = mix(color, uPalette[3] * 0.83 + uPalette[5] * 0.35,
         disk.mask * 0.82);
@@ -378,8 +414,16 @@ vec3 background(vec2 uv) {
   return color;
 }
 
-vec3 drawMoons(vec3 color, vec2 uv, float radius, vec3 light, float frontPass) {
-  if (uMoons <= 0) return color;
+// Premultiplied-alpha accumulation keeps partially transparent ring edges
+// correctly colored, while producing the same appearance over opaque space.
+vec4 overLayer(vec4 dst, vec3 rgb, float coverage) {
+  float a = clamp(coverage, 0.0, 1.0);
+  return vec4(dst.rgb * (1.0 - a) + rgb * a,
+              dst.a * (1.0 - a) + a);
+}
+
+vec4 drawMoons(vec4 color, vec2 uv, float radius, vec3 light, float frontPass) {
+  if (uMoons <= 0 || uExportMoons < 0.5) return color;
   for (int i = 0; i < 8; i++) {
     if (i >= uMoons) break;
     float fi = float(i);
@@ -401,7 +445,7 @@ vec3 drawMoons(vec3 color, vec2 uv, float radius, vec3 light, float frontPass) {
       float lit = clamp(dot(n, light), 0.0, 1.0);
       float pits = fbm(vec3(mxy * 6.0, uSeed + fi));
       vec3 moon = mix(vec3(0.25), vec3(0.74), pits) * (0.25 + lit * 0.9) * mix(0.74, 1.0, front);
-      color = moon;
+      color = vec4(moon, 1.0);
     }
   }
   return color;
@@ -517,18 +561,20 @@ void main() {
 
   float radius = ((uBody == 0 || uBody == 4) && uRings < 0.5 ? 0.84 : 0.68) * uZoom;
   vec3 light = normalize(vec3(uLightX, -uLightY, 0.9));
-  vec3 color = background(uv);
+  vec4 scene = uExportTransparent > 0.5 ? vec4(0.0) :
+      vec4(background(uv), 1.0);
 
-  float rings = max(uRings, step(7.5, float(uBody)));
+  float rings = max(uRings, step(7.5, float(uBody))) * uExportRings;
   Ring ring = Ring(0.0, 0.0, vec3(0.0));
   // Ring noise is expensive; do not sample it on ringless worlds.
   if (rings > 0.5) ring = getRing(uv, radius);
   float backRing = ring.mask * rings * (1.0 - ring.front);
-  color = mix(color, ring.color * 0.72, backRing);
-  color = drawMoons(color, uv, radius, light, 0.0);
+  scene = overLayer(scene, ring.color * 0.72, backRing);
+  scene = drawMoons(scene, uv, radius, light, 0.0);
 
   float d = length(uv);
   if (d <= radius) {
+    vec3 color = vec3(0.0);
     vec2 xy = uv / radius;
     float z = sqrt(max(0.0, 1.0 - dot(xy, xy)));
     vec3 normal = normalize(vec3(xy, z));
@@ -569,7 +615,9 @@ void main() {
     }
 
     if (uClouds > 0.0 && uBody != 1 && uBody != 7 && uBody != 8) {
-      vec3 cp = rotateY(normal, turn * 1.12 + uTime * uCloudSpeed * 0.25);
+      float cloudsTurn = uExportLoop > 0.5 ? turn :
+          turn * 1.12 + uTime * uCloudSpeed * 0.25;
+      vec3 cp = rotateY(normal, cloudsTurn);
       if (uBody == 6) {
         // Small atmospheric wisps, not another large blurry cloud mask.
         float haze = noise(cp * (10.5 + uRoughness * 5.0) +
@@ -599,37 +647,41 @@ void main() {
         (0.07 + 0.23 * sunward + 0.28 * surf.glow);
     color += vec3(1.0, 0.24, 0.06) * surf.glow * 0.37;
     }
+    scene = vec4(color, 1.0);
   }
-
-
 
   float frontRing = ring.mask * rings * ring.front;
   if (frontRing > 0.0) {
     float dimBehindPlanet = mix(1.0, 0.82, smoothstep(radius * 0.2, radius, d));
-    color = mix(color, ring.color * dimBehindPlanet, frontRing);
+    scene = overLayer(scene, ring.color * dimBehindPlanet, frontRing);
   }
 
-  if (d > radius && uAtmosphere > 0.0) {
+  if (d > radius && uAtmosphere > 0.0 && uExportGlow > 0.5) {
     float outerHalo = radius * (1.17 + uAtmosphere * 0.19);
-    // Skip expensive halo lighting over the large empty sky region.
     if (d < outerHalo) {
       float halo = 1.0 - smoothstep(radius * 1.005, outerHalo, d);
       float side = clamp(0.55 + dot(normalize(uv), light.xy) * 0.44, 0.0, 1.0);
       float starBoost = step(6.5, float(uBody));
-      color += uPalette[5] * halo * halo * uAtmosphere *
+      float strength = halo * halo * uAtmosphere *
           (0.10 + 0.22 * side + starBoost * 0.34);
+      if (uExportTransparent > 0.5)
+        scene = overLayer(scene, uPalette[5], strength);
+      else
+        scene.rgb += uPalette[5] * strength;
     }
   }
 
-  color = drawMoons(color, uv, radius, light, 1.0);
+  scene = drawMoons(scene, uv, radius, light, 1.0);
 
+  // Convert accumulated premultiplied RGB back to straight-alpha pixels.
+  vec3 color = scene.a > 0.0001 ? scene.rgb / scene.a : vec3(0.0);
   if (uBody != 0 && uBody != 4) {
     color = clamp(color, 0.0, 1.0);
     color = pow(color, vec3(0.94));
     float offset = (bayer4(gl_FragCoord.xy) - 0.5) * uDither * 0.72;
     color = floor(color * 26.0 + 0.5 + offset) / 26.0;
   }
-  outColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+  outColor = vec4(clamp(color, 0.0, 1.0), scene.a);
 }`;
 
 let program;
@@ -645,6 +697,12 @@ let framePending = false;
 let lastRenderedMs = -Infinity;
 const session = createSessionStore(() => window.localStorage);
 const editorPrefs = session.loadPreferences();
+const exportOptionStore = createExportOptionStore(() => window.localStorage);
+let exportOptions = exportOptionStore.load();
+const animationStore = createAnimationStore(() => window.localStorage);
+let animationSettings = animationStore.load();
+let animationPreviewLoop = null;
+let activeAnimatedController = null;
 let editHistory;
 let simulationSeconds = 0;
 let batchController = null;
@@ -663,6 +721,8 @@ if (!gl) {
   uniforms = collectUniforms(program);
   gl.useProgram(program);
   bindUi();
+  syncExportUi(exportOptions);
+  syncAnimationUi(animationSettings);
   // A shared link takes precedence over the most recently saved local world.
   if (!new URLSearchParams(window.location.hash.slice(1)).has("planet")) {
     const saved = session.loadPlanetCode();
@@ -762,6 +822,11 @@ function collectUniforms(shaderProgram) {
     "uMoonTilt",
     "uMoonSpeed",
     "uMoonSize",
+    "uExportTransparent",
+    "uExportMoons",
+    "uExportRings",
+    "uExportGlow",
+    "uExportStars",
   ];
   return Object.fromEntries(names.map((name) => [name, gl.getUniformLocation(shaderProgram, name)]));
 }
@@ -813,13 +878,15 @@ function tick(time) {
   if (state.animate) requestFrame();
 }
 
-function draw(timeSeconds = simulationSeconds, turn = rotationPhase) {
-  resizeCanvas();
-  gl.viewport(0, 0, canvas.width, canvas.height);
+function draw(timeSeconds = simulationSeconds, turn = rotationPhase, target = null) {
+  if (!target) resizeCanvas();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, target?.framebuffer ?? null);
+  const size = target?.size ?? canvas.width;
+  gl.viewport(0, 0, size, size);
   gl.useProgram(program);
 
   const palette = paletteVectors[state.palette] || paletteVectors.aurora;
-  gl.uniform2f(uniforms.uResolution, canvas.width, canvas.height);
+  gl.uniform2f(uniforms.uResolution, size, size);
   gl.uniform1f(uniforms.uTime, timeSeconds);
   gl.uniform1f(uniforms.uTurn, turn);
   gl.uniform1f(uniforms.uSeed, Number(state.seed) || 1);
@@ -854,6 +921,13 @@ function draw(timeSeconds = simulationSeconds, turn = rotationPhase) {
   gl.uniform1f(uniforms.uMoonTilt, Number(state.moonTilt));
   gl.uniform1f(uniforms.uMoonSpeed, Number(state.moonSpeed));
   gl.uniform1f(uniforms.uMoonSize, Number(state.moonSize));
+  const layers = target?.options;
+  gl.uniform1f(uniforms.uExportTransparent, layers?.transparent ? 1 : 0);
+  gl.uniform1f(uniforms.uExportMoons, layers?.moons === false ? 0 : 1);
+  gl.uniform1f(uniforms.uExportRings, layers?.rings === false ? 0 : 1);
+  gl.uniform1f(uniforms.uExportGlow, layers?.glow === false ? 0 : 1);
+  gl.uniform1f(uniforms.uExportStars, layers?.stars === false ? 0 : 1);
+  gl.uniform1f(uniforms.uExportLoop, target?.seamless ? 1 : 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
@@ -883,6 +957,34 @@ function bindUi() {
       if (eventType === "change") recordEdit();
     });
     if (input.type === "range") input.addEventListener("change", recordEdit);
+  });
+
+  const presetInput = document.querySelector("[data-export-preset]");
+  presetInput.addEventListener("change", () => {
+    const next = chooseExportPreset(presetInput.value);
+    if (!next) return;
+    exportOptions = next;
+    exportOptionStore.save(exportOptions);
+    syncExportUi(exportOptions);
+  });
+  document.querySelectorAll("[data-export-option]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      exportOptions = updateExportOption(
+        exportOptions, checkbox.dataset.exportOption, checkbox.checked,
+      );
+      exportOptionStore.save(exportOptions);
+      syncExportUi(exportOptions);
+    });
+  });
+
+  document.querySelectorAll("[data-animation-setting]").forEach((input) => {
+    input.addEventListener("change", () => {
+      const name = input.dataset.animationSetting;
+      const value = input.type === "checkbox" ? input.checked : Number(input.value);
+      animationSettings = normalizeAnimationSettings({ ...animationSettings, [name]: value });
+      animationStore.save(animationSettings);
+      syncAnimationUi(animationSettings);
+    });
   });
 
   document.querySelectorAll("[data-grid-preset]").forEach((button) => {
@@ -934,6 +1036,18 @@ function bindUi() {
     button.addEventListener("click", () => {
       applyPreset(button.dataset.preset);
     });
+  });
+
+  const exportDialog = document.querySelector("#export-preview-dialog");
+  document.querySelector("[data-export-preview-close]").addEventListener(
+    "click", () => exportDialog.close(),
+  );
+  exportDialog.addEventListener("close", () => {
+    animationPreviewLoop?.stop();
+    animationPreviewLoop = null;
+  });
+  document.querySelector("[data-animation-preview-toggle]").addEventListener("click", () => {
+    animationPreviewLoop?.toggle();
   });
 
   const shortcutDialog = document.querySelector("#shortcuts-dialog");
@@ -1046,13 +1160,89 @@ const actions = {
   mutate() {
     mutate();
   },
-  async exportPng() {
+  async previewExport() {
+    let renderer;
     try {
-      draw(simulationSeconds);
-      await downloadCanvas(exportCanvas(), `planet-${state.seed}.png`);
-      setStatus(`Exported PNG ${state.size}x${state.size} from ${renderSize()}px grid`);
+      animationPreviewLoop?.stop();
+      animationPreviewLoop = null;
+      const { createExportRenderer } = await import("./export-renderer.js");
+      renderer = createExportRenderer(gl, draw, renderSize());
+      const frame = renderer.render(simulationSeconds, rotationPhase, exportOptions);
+      const preview = document.querySelector("#export-preview-canvas");
+      const ctx = preview.getContext("2d");
+      if (!ctx) throw new Error("Preview canvas unavailable");
+      ctx.clearRect(0, 0, preview.width, preview.height);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(frame, 0, 0, preview.width, preview.height);
+      document.querySelector("#export-preview-title").textContent = "Export preview";
+      document.querySelector("[data-export-preview-playback]").hidden = true;
+      document.querySelector("#export-preview-dialog").showModal();
+    } catch (error) {
+      setStatus(`Export preview failed: ${error?.message || "unknown error"}`);
+    } finally {
+      renderer?.dispose();
+      invalidate();
+    }
+  },
+  async previewAnimation() {
+    if (!animationSummary(animationSettings).valid) {
+      setStatus("Reduce length or FPS to 120 frames or fewer");
+      return;
+    }
+    let renderer;
+    try {
+      const [{ createExportRenderer }, { createFramePlan },
+        { startAnimationPreview }] = await Promise.all([
+          import("./export-renderer.js"),
+          import("./animation-frames.js"),
+          import("./animation-preview.js"),
+        ]);
+      renderer = createExportRenderer(gl, draw, renderSize());
+      const plan = createFramePlan({
+        seconds: animationSettings.seconds,
+        fps: animationSettings.fps,
+        seamless: animationSettings.seamless,
+        baseTime: simulationSeconds,
+        baseTurn: rotationPhase,
+        spinSpeed: spinSpeed(),
+      });
+      const dialog = document.querySelector("#export-preview-dialog");
+      document.querySelector("#export-preview-title").textContent = "Animated export preview";
+      const playback = document.querySelector("[data-export-preview-playback]");
+      playback.hidden = false;
+      dialog.showModal();
+      animationPreviewLoop = startAnimationPreview({
+        renderer, plan, options: { ...exportOptions },
+        canvas: document.querySelector("#export-preview-canvas"),
+        label: document.querySelector("[data-preview-frame]"),
+        repeat: animationSettings.repeat,
+        onPlaybackChange: (playing) => {
+          document.querySelector("[data-animation-preview-toggle]").textContent = playing ? "Pause" : "Play";
+        },
+      });
+      renderer = null; // preview loop owns the framebuffer lifecycle
+    } catch (error) {
+      document.querySelector("#export-preview-dialog").close();
+      setStatus(`Animation preview failed: ${error?.message || "unknown error"}`);
+    } finally {
+      renderer?.dispose();
+      invalidate();
+    }
+  },
+  async exportPng() {
+    let renderer;
+    try {
+      const { createExportRenderer } = await import("./export-renderer.js");
+      renderer = createExportRenderer(gl, draw, renderSize());
+      const frame = renderer.render(simulationSeconds, rotationPhase, exportOptions);
+      const suffix = exportOptions.transparent ? "-transparent" : "";
+      await downloadCanvas(exportCanvas(frame), `planet-${state.seed}${suffix}.png`);
+      setStatus(`Exported ${exportOptions.transparent ? "transparent" : "opaque"} PNG ${state.size}×${state.size}`);
     } catch (error) {
       setStatus(`PNG export failed: ${error?.message || "unknown error"}`);
+    } finally {
+      renderer?.dispose();
+      invalidate();
     }
   },
   exportSheet() {
@@ -1060,6 +1250,14 @@ const actions = {
   },
   exportVideo() {
     runExtra("exportVideo");
+  },
+  exportApng() { runExtra("exportApng"); },
+  exportGif() { runExtra("exportGif"); },
+  cancelAnimatedExport() {
+    if (activeAnimatedController) {
+      activeAnimatedController.abort();
+      setStatus("Animation export cancelled");
+    }
   },
   copyCode() {
     copyText(serializeState(), "Copied planet code");
@@ -1177,13 +1375,22 @@ function mutate() {
 
 // Optional tools form a separate chunk and are fetched only on first use.
 async function runExtra(action) {
-  if (recordingVideo || !gl) return;
+  if (recordingVideo || activeAnimatedController || !gl) return;
   const isVideo = action === "exportVideo";
+  const isAnimated = action === "exportApng" || action === "exportGif";
   const isBatch = action === "generateBatch";
+  if (isAnimated && !animationSummary(animationSettings).valid) {
+    setStatus("Reduce length or FPS to 120 frames or fewer");
+    return;
+  }
   if (isVideo) recordingVideo = true;
   if (isBatch) batchController?.abort();
-  const controller = isBatch ? new AbortController() : null;
-  if (controller) batchController = controller;
+  const controller = isBatch || isAnimated ? new AbortController() : null;
+  if (isBatch) batchController = controller;
+  if (isAnimated) {
+    activeAnimatedController = controller;
+    document.querySelector('[data-action="cancelAnimatedExport"]').hidden = false;
+  }
 
   try {
     const extra = await import("./extra-actions.js");
@@ -1194,14 +1401,25 @@ async function runExtra(action) {
       syncUi, normalizeState, resizeCanvas, invalidate, recordEdit,
       setStatus, clampInt, round, sleep,
       signal: controller?.signal,
+      exportOptions: { ...exportOptions },
+      animationSettings: { ...animationSettings },
+      createFrameRenderer: async () => {
+        const { createExportRenderer } = await import("./export-renderer.js");
+        return createExportRenderer(gl, draw, renderSize());
+      },
       yieldControl: () => new Promise((resolve) => setTimeout(resolve, 0)),
     });
   } catch (error) {
-    const label = isBatch ? "Variations" : action === "exportSheet" ? "Sheet export" : "Video export";
+    const label = isBatch ? "Variations" : action === "exportSheet" ? "Sheet export" :
+      isAnimated ? "Animation export" : "Video export";
     if (!controller?.signal.aborted) setStatus(`${label} failed: ${error?.message || "unknown error"}`);
   } finally {
     if (isVideo) recordingVideo = false;
     if (isBatch && batchController === controller) batchController = null;
+    if (isAnimated && activeAnimatedController === controller) {
+      activeAnimatedController = null;
+      document.querySelector('[data-action="cancelAnimatedExport"]').hidden = true;
+    }
     invalidate();
   }
 }
@@ -1218,15 +1436,15 @@ function spinSpeed() {
   return 0.18 + Number(state.spin) * 1.35;
 }
 
-function exportCanvas() {
+function exportCanvas(source = canvas) {
   const size = clampInt(state.size, 64, 512);
-  if (canvas.width === size && canvas.height === size) return canvas;
+  if (source.width === size && source.height === size) return source;
   const output = document.createElement("canvas");
   output.width = size;
   output.height = size;
   const ctx = output.getContext("2d");
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(canvas, 0, 0, size, size);
+  ctx.drawImage(source, 0, 0, size, size);
   return output;
 }
 

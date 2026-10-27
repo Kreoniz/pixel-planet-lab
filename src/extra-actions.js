@@ -1,7 +1,12 @@
 // Loaded only after the user asks for a batch, spritesheet, or video.
 // The interactive planet preview never needs to download this module.
 import { validateSheetLayout } from "./editor-state.js";
-export async function exportSheet({ state, canvas, draw, simulationSeconds, rotationPhase, spinSpeed, downloadCanvas, setStatus, invalidate, clampInt }) {
+import { createFramePlan, runFrameSequence } from "./animation-frames.js";
+export async function exportSheet({
+  state, simulationSeconds, rotationPhase, spinSpeed, downloadCanvas,
+  setStatus, invalidate, clampInt, createFrameRenderer, exportOptions,
+  animationSettings, yieldControl,
+}) {
   const size = clampInt(state.size, 64, 512);
   const frames = clampInt(state.frames, 1, 96);
   const columns = clampInt(state.columns, 1, 16);
@@ -13,23 +18,116 @@ export async function exportSheet({ state, canvas, draw, simulationSeconds, rota
   const baseTime = simulationSeconds;
   const baseTurn = rotationPhase;
   const speed = spinSpeed();
+  let renderer;
 
   try {
     if (!ctx) throw new Error("Canvas 2D context unavailable");
     ctx.imageSmoothingEnabled = false;
-    for (let i = 0; i < frames; i++) {
-      // Frame samples cover the requested span; arbitrary shader dynamics
-      // are not guaranteed to form a mathematically seamless loop.
-      const offset = (i / frames) * Number(state.sheetSeconds);
-      draw(baseTime + offset, baseTurn + offset * speed);
-      ctx.drawImage(canvas, (i % columns) * size, Math.floor(i / columns) * size, size, size);
-    }
+    renderer = await createFrameRenderer();
+    const plan = createFramePlan({
+      seconds: Number(state.sheetSeconds), frames, baseTime,
+      baseTurn, spinSpeed: speed, seamless: animationSettings.seamless,
+    });
+    await runFrameSequence(plan, (sample, i) => {
+      const image = renderer.render(sample.time, sample.turn, exportOptions, sample.seamless);
+      ctx.drawImage(image, (i % columns) * size, Math.floor(i / columns) * size, size, size);
+    }, { yieldControl });
 
-    await downloadCanvas(sheet, `planet-${state.seed}-sheet.png`);
-    setStatus(`Exported ${frames} frame sheet`);
+    const suffix = exportOptions.transparent ? "-transparent" : "";
+    await downloadCanvas(sheet, `planet-${state.seed}-sheet${suffix}.png`);
+    setStatus(`Exported ${frames}-frame ${exportOptions.transparent ? "transparent" : "opaque"} spritesheet`);
   } catch (error) {
     setStatus(`Sheet export failed: ${error?.message || "unknown error"}`);
   } finally {
+    renderer?.dispose();
+    invalidate();
+  }
+}
+
+
+// Animated exports share the deterministic frame plan with spritesheets and
+// the checkerboard loop preview. Formats remain lazy-loaded on demand.
+export async function exportApng(options) {
+  return exportAnimated("apng", options);
+}
+export async function exportGif(options) {
+  return exportAnimated("gif", options);
+}
+
+async function canvasPng(canvas) {
+  return new Promise((resolve, reject) => canvas.toBlob(
+    (blob) => blob ? resolve(blob) : reject(new Error("Could not encode PNG frame")),
+    "image/png",
+  ));
+}
+
+async function exportAnimated(format, {
+  state, simulationSeconds, rotationPhase, spinSpeed, downloadBlob, setStatus,
+  invalidate, clampInt, createFrameRenderer, exportOptions, animationSettings,
+  signal, yieldControl,
+}) {
+  let renderer;
+  try {
+    const seconds = animationSettings.seconds;
+    const fps = animationSettings.fps;
+    const plan = createFramePlan({
+      seconds, fps, baseTime: simulationSeconds,
+      baseTurn: rotationPhase, spinSpeed: spinSpeed(),
+      seamless: animationSettings.seamless,
+    });
+    const size = clampInt(state.size, 64, 512);
+    const output = document.createElement("canvas");
+    output.width = output.height = size;
+    const ctx = output.getContext("2d", { willReadFrequently: format === "gif" });
+    if (!ctx) throw new Error("Could not initialize animated export canvas");
+    ctx.imageSmoothingEnabled = false;
+    renderer = await createFrameRenderer();
+
+    let apngFrames;
+    let gif;
+    if (format === "apng") {
+      apngFrames = [];
+    } else {
+      const { createGifEncoder } = await import("./gif-encoder.js");
+      gif = createGifEncoder({width:size,height:size,fps,repeat:animationSettings.repeat});
+    }
+
+    await runFrameSequence(plan, async (sample, i) => {
+      const rendered = renderer.render(
+        sample.time, sample.turn, exportOptions, sample.seamless,
+      );
+      ctx.clearRect(0, 0, size, size);
+      ctx.drawImage(rendered, 0, 0, size, size);
+      if (apngFrames) {
+        apngFrames.push(new Uint8Array(await (await canvasPng(output)).arrayBuffer()));
+      } else {
+        gif.addFrame(ctx.getImageData(0, 0, size, size).data);
+      }
+    }, {
+      signal, yieldControl,
+      onProgress: (frame, count) => {
+        if (frame === 1 || frame === count || frame % 5 === 0)
+          setStatus("Encoding " + format.toUpperCase() + " " + frame + "/" + count);
+      },
+    });
+
+    if (signal?.aborted) throw new Error("Animation export cancelled");
+    let blob;
+    if (apngFrames) {
+      const { encodeApng } = await import("./apng-encoder.js");
+      blob = encodeApng(apngFrames, {fps,repeat:animationSettings.repeat});
+    } else {
+      blob = gif.finish();
+    }
+    const suffix = exportOptions.transparent ? "-transparent" : "";
+    downloadBlob(blob, "planet-" + state.seed + suffix + "." + format);
+    setStatus("Exported " + plan.frames + "-frame " + format.toUpperCase() +
+      (plan.seamless ? " seamless rotation" : " animation"));
+  } catch (error) {
+    if (signal?.aborted) setStatus("Animation export cancelled");
+    else setStatus(format.toUpperCase() + " export failed: " + (error?.message || "unknown error"));
+  } finally {
+    renderer?.dispose();
     invalidate();
   }
 }

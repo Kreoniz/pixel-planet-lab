@@ -127,3 +127,51 @@ domain-warped weather patterns, mid-frequency flow, fine aerosols and wispy
 cloud layers. This avoids the oversized smooth blobs that appeared with the
 previous single-noise shader. Existing planet seeds, palette choices and
 shareable configuration codes remain valid.
+
+
+## Exporting transparent planet assets
+
+The **Export** section now offers three PNG/spritesheet presets:
+
+- **Full scene** (default): retains the previous opaque output, stars, moons, rings and atmosphere.
+- **Planet only**: transparent background; excludes stars, moons, rings and outer glow.
+- **Planet + rings**: transparent background with any enabled rings and outer glow, but no moons or stars.
+
+Expand **Customize layers** to toggle background transparency, moons, rings,
+outer glow and stars individually. Stars are omitted from transparent output.
+These choices are stored in browser preferences, not in planet share codes or
+undo history. They never change the live editor or the selected planet's properties.
+
+Exports use an offscreen RGBA8 WebGL2 framebuffer and retain proper transparent
+pixels through nearest-neighbor PNG and spritesheet scaling. The interactive
+canvas stays opaque, so normal previews look the same. WebM still exports the
+full scene; animated GIF/APNG with transparency is a separate follow-up.
+
+A **Preview PNG layers** action renders the selected export layers over a checkerboard without changing the editor preview or downloading a file.
+
+
+## Animated PNG and GIF in the same export workflow
+
+Open **Export → Animated exports** to create APNG (full color, full alpha)
+or GIF (256-color indexed animation, binary transparency). Both respect the
+same Full scene / Planet only / Planet + rings / Custom layers settings as PNG
+and spritesheets.
+
+Set duration (1–12 seconds), FPS (4–30), and whether the animation repeats.
+Encoding is limited to **120 frames** to prevent expensive mobile exports.
+
+**Seamless rotation** samples one complete planetary revolution, holding
+secondary shader clocks fixed so the animation starts and ends on matching
+rotation phases. Disable it for a timed sequence where clouds, storms and moons
+advance naturally; timed sequences are not guaranteed to loop seamlessly.
+Spritesheets use the same frame sampler and seamless setting.
+
+Select **Preview loop** to inspect the animation over the checkerboard before
+exporting. Pause or play it within the preview dialog; closing the dialog
+releases the temporary WebGL resources. Long exports show progress and include
+a Cancel action.
+
+GIF is a compatibility format: its palette is limited to 256 colors and alpha
+is either visible or transparent. APNG is the recommended high-quality option
+for transparent pixel planets. All animation preferences remain local to the
+browser; they do not modify the preview, planet share codes or undo history.

@@ -2,6 +2,8 @@ import { controlSections, presetButtons, presets } from "./config.js";
 import { controlAvailability } from "./control-availability.js";
 import { shortcuts, actionShortcuts, presetShortcuts, displayShortcut } from "./hotkeys.js";
 import { pixelScaleInfo } from "./editor-state.js";
+import { exportPresets } from "./export-options.js";
+import { animationSummary } from "./animation-settings.js";
 
 const toolbarActions = [
   ["randomize", "Random", "primary"],
@@ -69,6 +71,21 @@ export function renderApp(root) {
         <p class="batch-empty">Generate a batch to explore other worlds.</p>
       </div>
     </section>
+
+    <dialog class="export-preview-dialog" id="export-preview-dialog" aria-labelledby="export-preview-title">
+      <div class="export-preview-header">
+        <h2 id="export-preview-title">Export preview</h2>
+        <button type="button" data-export-preview-close>Close</button>
+      </div>
+      <div class="export-checkerboard">
+        <canvas id="export-preview-canvas" width="256" height="256" aria-label="Exported planet on a transparency grid"></canvas>
+      </div>
+      <div class="export-preview-playback" data-export-preview-playback hidden>
+        <output data-preview-frame>Frame 1</output>
+        <button type="button" data-animation-preview-toggle>Pause</button>
+      </div>
+      <p class="export-preview-caption">Checkerboard represents transparency. Preview only; your planet settings are unchanged.</p>
+    </dialog>
 
     <dialog class="shortcuts-dialog" id="shortcuts-dialog" aria-labelledby="shortcuts-dialog-title" aria-describedby="shortcuts-dialog-description">
       <div class="shortcuts-heading">
@@ -165,6 +182,35 @@ export function syncEditorUi(preferences, { canUndo = false, canRedo = false } =
   if (redo) redo.disabled = !canRedo;
 }
 
+export function syncExportUi(options) {
+  const preset = document.querySelector?.("[data-export-preset]");
+  if (preset) preset.value = options.preset;
+  document.querySelectorAll("[data-export-option]").forEach((checkbox) => {
+    checkbox.checked = Boolean(options[checkbox.dataset.exportOption]);
+    checkbox.disabled = checkbox.dataset.exportOption === "stars" && options.transparent;
+  });
+  const summary = document.querySelector?.("[data-export-summary]");
+  if (summary) summary.textContent = options.transparent
+    ? "Transparent PNG and spritesheet. Stars excluded; live preview and WebM are unchanged."
+    : "Opaque PNG and spritesheet. Live preview and WebM are unchanged.";
+}
+export function syncAnimationUi(settings) {
+  document.querySelectorAll("[data-animation-setting]").forEach((input) => {
+    const value = settings[input.dataset.animationSetting];
+    if (input.type === "checkbox") input.checked = Boolean(value);
+    else input.value = String(value);
+  });
+  const summary = animationSummary(settings);
+  const output = document.querySelector?.("[data-animation-summary]");
+  if (output) {
+    output.textContent = summary.text;
+    output.dataset.invalid = String(!summary.valid);
+  }
+  for (const name of ["previewAnimation", "exportApng", "exportGif"]) {
+    const button = document.querySelector?.('[data-action="' + name + '"]');
+    if (button) button.disabled = !summary.valid;
+  }
+}
 export function syncTimelineUi(seconds, isPlaying) {
   const scrub = document.querySelector?.("[data-timeline]");
   if (scrub && document.activeElement !== scrub)
@@ -174,6 +220,49 @@ export function syncTimelineUi(seconds, isPlaying) {
   if (scrub) scrub.setAttribute("aria-valuetext", `${seconds.toFixed(1)} seconds, ${isPlaying ? "playing" : "paused"}`);
 }
 
+function exportSettingsTemplate() {
+  const labels = {
+    "full-scene": "Full scene · as previewed",
+    "planet-only": "Planet only · transparent",
+    "planet-rings": "Planet + rings · transparent",
+  };
+  const options = Object.keys(exportPresets).map((name) =>
+    '<option value="' + name + '">' + labels[name] + '</option>').join("");
+  return '<div class="export-settings control-wide">' +
+    '<label class="field" for="export-preset">' +
+      '<span class="field-label">PNG / spritesheet content</span>' +
+      '<select id="export-preset" data-export-preset>' + options +
+        '<option value="custom" disabled>Custom layers</option></select></label>' +
+    '<details class="export-layer-details"><summary>Customize layers</summary>' +
+      '<div class="export-layer-grid">' +
+        '<label><input type="checkbox" data-export-option="transparent" /> Transparent background</label>' +
+        '<label><input type="checkbox" data-export-option="rings" /> Rings</label>' +
+        '<label><input type="checkbox" data-export-option="moons" /> Moons</label>' +
+        '<label><input type="checkbox" data-export-option="glow" /> Outer glow</label>' +
+        '<label><input type="checkbox" data-export-option="stars" /> Stars</label>' +
+      '</div></details>' +
+    '<p class="export-note" data-export-summary></p>' +
+    '<button type="button" class="export-preview-trigger" data-action="previewExport">Preview PNG layers</button>' +
+    '<details class="animation-export-details">' +
+      '<summary>Animated exports · GIF / APNG</summary>' +
+      '<div class="animation-export-settings">' +
+        '<div class="animation-inputs">' +
+          '<label class="field">Length (seconds)<input data-animation-setting="seconds" type="number" min="1" max="12" step="1" /></label>' +
+          '<label class="field">Animation FPS<input data-animation-setting="fps" type="number" min="4" max="30" step="1" /></label>' +
+        '</div>' +
+        '<label class="animation-toggle"><input data-animation-setting="seamless" type="checkbox" /> Seamless rotation</label>' +
+        '<label class="animation-toggle"><input data-animation-setting="repeat" type="checkbox" /> Repeat continuously</label>' +
+        '<p class="export-note" data-animation-summary></p>' +
+        '<div class="export-animation-actions">' +
+          '<button type="button" data-action="previewAnimation">Preview loop</button>' +
+          '<button type="button" data-action="exportApng">Export APNG</button>' +
+          '<button type="button" data-action="exportGif">Export GIF</button>' +
+        '</div>' +
+        '<button type="button" class="cancel-animation-export" data-action="cancelAnimatedExport" hidden>Cancel animation export</button>' +
+      '</div>' +
+    '</details>' +
+  '</div>';
+}
 function sectionTemplate(section) {
   const expanded = section.title === "World" || section.title === "Surface" ? " open" : "";
   return `
@@ -183,6 +272,7 @@ function sectionTemplate(section) {
         <span class="section-arrow" aria-hidden="true"></span>
       </summary>
       <div class="control-grid">
+        ${section.title === "Export" ? exportSettingsTemplate() : ""}
         ${section.controls.map(controlTemplate).join("")}
         ${section.title === "World" ? `<label class="field field-range control-wide" title="Target animation frame rate, not a guarantee of GPU performance">
           <span class="field-label">Preview FPS target</span>

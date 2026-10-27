@@ -14,7 +14,7 @@ test("retains the original two-column studio without introducing navigation", ()
   assert.match(html, /role="status" aria-live="polite"/);
   assert.doesNotMatch(html, /<nav\b|class="site-header"/);
   assert.equal((html.match(/class="control-section"/g) || []).length, controlSections.length);
-  assert.equal((html.match(/<details\b/g) || []).length, controlSections.length);
+  assert.equal((html.match(/<details class="control-section"/g) || []).length, controlSections.length);
 
   for (const [name] of presetButtons) {
     assert.ok(html.includes(`data-preset="${name}"`), `missing ${name}`);

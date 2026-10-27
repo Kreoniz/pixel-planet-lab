@@ -102,3 +102,28 @@ Switching presets resets stale world-specific effects but retains export setting
 guaranteed to loop seamlessly. Browser-safe canvas dimension checks fail with an
 actionable message before allocating huge sheets. Batch variations are generated
 incrementally and can be interrupted by subsequent editing.
+
+
+## Shader and visual inspiration
+
+The illustrated terrestrial/ocean shader uses independent water, land, and
+cloud layers inspired by [Deep-Fold/PixelPlanets](https://github.com/Deep-Fold/PixelPlanets).
+Clouds use independently warped 3D weather-noise clusters, with small
+discrete highlights and subtle shadows rather than continuous broad ribbons.
+The new WebGL2 shader code is independently implemented; Deep-Fold's layer
+compositing and palette treatment inspired its visual direction. We preserve
+attribution and the upstream [MIT license](licenses/Deep-Fold-PixelPlanets-MIT.txt)
+(Copyright © 2020 Deep-Fold). The editor and other world types remain independent.
+
+## Mobile and toxic planet refinement
+
+On phone-sized viewports, the eight toolbar actions use two rows of four buttons,
+the timeline gets a dedicated row, and type/palette controls occupy full-width
+fields. Buttons retain readable labels and the page allows additional bottom
+spacing for mobile browser controls.
+
+The Toxic body uses a separate, multi-scale 3D atmospheric noise field:
+domain-warped weather patterns, mid-frequency flow, fine aerosols and wispy
+cloud layers. This avoids the oversized smooth blobs that appeared with the
+previous single-noise shader. Existing planet seeds, palette choices and
+shareable configuration codes remain valid.

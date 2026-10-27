@@ -459,3 +459,118 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .timeline output { min-width: 45px; text-align: right; }
   .preview-drag-hint { font-size: 10px; }
 }
+
+
+/* Phone layout: give every action a real tap target and readable label.
+   The old flex rule squeezed eight controls into ~41px-wide buttons. */
+@media (max-width: 540px) {
+  body {
+    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .app-shell {
+    padding-inline: max(8px, env(safe-area-inset-left, 0px));
+  }
+
+  .stage {
+    padding: 11px;
+  }
+
+  .topbar {
+    gap: 11px;
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    width: 100%;
+    gap: 7px;
+  }
+
+  .toolbar > button,
+  .toolbar > .shortcuts-trigger {
+    flex: initial;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 46px;
+    padding: 8px 4px;
+    font-size: clamp(11px, 3.1vw, 13px);
+    line-height: 1.25;
+    white-space: normal;
+    overflow-wrap: normal;
+    text-align: center;
+  }
+
+  .toolbar > button[data-action="undo"],
+  .toolbar > button[data-action="redo"] {
+    min-width: 0;
+    padding-inline: 4px;
+    font-size: 19px;
+  }
+
+  .canvas-wrap {
+    padding-inline: 0;
+  }
+
+  #planetCanvas {
+    width: min(100%, 540px);
+  }
+
+  .preview-meta {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 9px 12px;
+    padding-inline: 2px;
+  }
+
+  .preview-drag-hint {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  #fps {
+    grid-column: 2;
+    grid-row: 1;
+    white-space: nowrap;
+    text-align: end;
+  }
+
+  .timeline {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    flex: initial;
+  }
+
+  .timeline button {
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .timeline input[type="range"] {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .control-grid > [data-control="body"],
+  .control-grid > [data-control="palette"] {
+    grid-column: 1 / -1;
+  }
+
+  .select-row select {
+    min-width: 0;
+  }
+
+  .lock-option {
+    font-size: 12px;
+    min-height: 32px;
+  }
+
+  .batch-section {
+    margin-bottom: 14px;
+  }
+}

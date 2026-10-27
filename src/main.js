@@ -6,6 +6,7 @@ import { createAnimationStore, normalizeAnimationSettings, animationSummary } fr
 import { chooseExportPreset, updateExportOption, createExportOptionStore } from "./export-options.js";
 import { createHistory, createSessionStore, normalizePreferences, nextPresetState } from "./editor-state.js";
 import { registerEditorHotkeys } from "./hotkeys.js";
+import { moonOrbitVectors } from "./moon-orbits.js";
 import { installMissingChunkRecovery } from "./missing-chunk-recovery.js";
 
 renderApp(document.querySelector("#app"));
@@ -98,6 +99,7 @@ uniform float uMoonSpread;
 uniform float uMoonTilt;
 uniform float uMoonSpeed;
 uniform float uMoonSize;
+uniform vec4 uMoonData[8];
 
 // Scene-composition flags apply to offscreen exports only. The preview always
 // draws the full opaque scene using defaults supplied by draw().
@@ -422,34 +424,118 @@ vec4 overLayer(vec4 dst, vec3 rgb, float coverage) {
               dst.a * (1.0 - a) + a);
 }
 
+// A moon is a small lit sphere, not a flat grayscale noise disc. Four
+// authored materials keep its colors readable even on a 128px grid.
+vec3 moonRock(vec3 surface, vec3 normal, vec3 light, vec3 geologyLight, float fi) {
+  vec3 seed = vec3(uSeed * 0.013, fi * 9.71, uSeed * 0.007);
+  float kind = mod(floor(uSeed * 0.017) + fi, 4.0);
+  // The closest moon has a material that fits its parent planet; more
+  // distant moons vary independently with the seed and orbital index.
+  if (fi < 0.5) {
+    if (uBody == 0 || uBody == 4) kind = 0.0;
+    else if (uBody == 2) kind = 1.0;
+    else if (uBody == 6) kind = 2.0;
+    else if (uBody == 3) kind = 3.0;
+  }
+
+  vec3 shadow = vec3(0.16, 0.18, 0.20);
+  vec3 mid = vec3(0.39, 0.42, 0.43);
+  vec3 bright = vec3(0.72, 0.73, 0.70);
+  if (kind > 0.5 && kind < 1.5) {
+    // Ice moon: pale blue mineral frost over darker fractures.
+    shadow = vec3(0.14, 0.27, 0.34);
+    mid = vec3(0.43, 0.61, 0.66);
+    bright = vec3(0.83, 0.91, 0.91);
+  } else if (kind > 1.5 && kind < 2.5) {
+    // Iron-rich moon: oxidized ochre regolith.
+    shadow = vec3(0.25, 0.16, 0.14);
+    mid = vec3(0.55, 0.34, 0.28);
+    bright = vec3(0.81, 0.61, 0.47);
+  } else if (kind > 2.5) {
+    // Dark basaltic moon with restrained cool highlights.
+    shadow = vec3(0.10, 0.12, 0.14);
+    mid = vec3(0.28, 0.31, 0.34);
+    bright = vec3(0.50, 0.53, 0.54);
+  }
+
+  float rockField = noise(surface * 5.3 + seed);
+  float grain = noise(surface * 16.0 + seed * 2.3);
+  vec3 rock = mix(shadow, mid, 0.73 + (rockField - 0.5) * 0.28);
+  rock = mix(rock, bright, smoothstep(0.56, 0.81, rockField) * 0.53);
+  rock *= 0.89 + grain * 0.18;
+
+  // Four deterministic circular impact basins: dark floors, thin bright
+  // raised rims. Craters occupy the spherical surface rather than XY noise.
+  float relief = 0.0;
+  for (int crater = 0; crater < 4; crater++) {
+    float k = float(crater);
+    float longitude = hash12(vec2(fi * 17.1 + k * 13.7, uSeed * 0.011)) * 6.2831853;
+    float z = mix(0.18, 0.96, hash12(vec2(k * 7.73, uSeed * 0.019 + fi * 2.1)));
+    vec3 center = vec3(cos(longitude) * sqrt(1.0 - z * z),
+                       sin(longitude) * sqrt(1.0 - z * z), z);
+    float r = mix(0.15, 0.34,
+        hash12(vec2(fi * 3.1 + k * 19.3, uSeed * 0.004)));
+    float chord = length(surface - center);
+    float basin = 1.0 - smoothstep(r * 0.38, r * 0.85, chord);
+    float rim = smoothstep(r * 0.66, r * 0.83, chord) *
+                (1.0 - smoothstep(r * 0.94, r * 1.15, chord));
+    float rimLight = clamp(dot(normalize(surface - center + vec3(0.001)),
+                               geologyLight), -1.0, 1.0);
+    relief -= basin * 0.23;
+    relief += rim * (0.11 + rimLight * 0.075);
+  }
+
+  float ndl = dot(normal, light);
+  float day = smoothstep(-0.15, 0.18, ndl);
+  float irradiance = 0.20 + day * 0.24 + max(ndl, 0.0) * 0.73;
+  vec3 shaded = clamp((rock + vec3(relief)) * irradiance, 0.0, 1.0);
+  // Compact palette-like values preserve sharp, legible moon features.
+  return floor(shaded * 22.0 + 0.5) / 22.0;
+}
+
 vec4 drawMoons(vec4 color, vec2 uv, float radius, vec3 light, float frontPass) {
   if (uMoons <= 0 || uExportMoons < 0.5) return color;
+
+  float bestDepth = -1e6;
+  vec3 nearestMoon = color.rgb;
+  bool foundMoon = false;
   for (int i = 0; i < 8; i++) {
     if (i >= uMoons) break;
     float fi = float(i);
-    float speed = mix(0.08, 0.62, uMoonSpeed) * (1.0 + fi * 0.08);
-    float a = uSeed * 0.0007 + fi * 1.74 + uTime * speed;
-    float orbit = radius * (1.12 + uMoonSpread * 0.58 + fi * mix(0.07, 0.2, uMoonSpread));
-    float tilt = mix(0.16, 0.72, uMoonTilt);
-    vec2 ellipse = vec2(cos(a) * orbit, sin(a) * radius * (tilt + fi * 0.015));
-    vec2 pos = rotate2((uMoonTilt - 0.5) * 0.45 + sin(uSeed + fi) * 0.12) * ellipse;
-    float front = step(0.0, sin(a));
-    if (abs(front - frontPass) > 0.5) continue;
 
-    float r = radius * mix(0.035, 0.12, uMoonSize) * (1.0 + fi * 0.07);
-    float d = length(uv - pos);
-    if (d < r) {
-      vec2 mxy = (uv - pos) / r;
-      float z = sqrt(max(0.0, 1.0 - dot(mxy, mxy)));
-      vec3 n = normalize(vec3(mxy, z));
-      float lit = clamp(dot(n, light), 0.0, 1.0);
-      float pits = fbm(vec3(mxy * 6.0, uSeed + fi));
-      vec3 moon = mix(vec3(0.25), vec3(0.74), pits) * (0.25 + lit * 0.9) * mix(0.74, 1.0, front);
-      color = vec4(moon, 1.0);
-    }
+    // Golden-angle phase spacing gives varied moon arrangements rather
+    // than a row of equally spaced identical grey discs.
+    // Orbital geometry is packed by the CPU once per frame, leaving only
+    // a tiny silhouette test in the full-screen fragment loop.
+    vec4 orbit = uMoonData[i];
+    float r = orbit.z;
+    float depth = orbit.w;
+    if (r <= 0.0) continue;
+    float front = step(0.0, depth);
+    if (abs(front - frontPass) > 0.5) continue;
+    vec2 mxy = (uv - orbit.xy) / r;
+    // Bounding-box rejection avoids expensive crater noise in empty sky.
+    if (abs(mxy.x) >= 1.0 || abs(mxy.y) >= 1.0) continue;
+    float distanceSquared = dot(mxy, mxy);
+    if (distanceSquared >= 1.0 || depth <= bestDepth) continue;
+
+    float z = sqrt(max(0.0, 1.0 - distanceSquared));
+    vec3 normal = normalize(vec3(mxy, z));
+    // Slow synchronous spin preserves stable crater features as moons orbit.
+    // Tidally slow texture rotation; secondary time is frozen for seamless
+    // exported planet rotations, so moon features remain stable in the loop.
+    float orbitSpeed = mix(0.08, 0.62, uMoonSpeed) / sqrt(1.0 + fi * 0.24);
+    float phase = uSeed * 0.0007 + fi * 2.3999632 + uTime * orbitSpeed;
+    float moonSpin = phase * 0.10 + fi * 1.47;
+    vec3 surface = rotateY(normal, moonSpin);
+    nearestMoon = moonRock(surface, normal, light, rotateY(light, moonSpin), fi);
+    bestDepth = depth;
+    foundMoon = true;
   }
+  if (foundMoon) return vec4(nearestMoon, 1.0);
   return color;
 }
+
 
 // A fixed 4x4 Bayer threshold map, expressed without dynamic array indexing.
 float bayer4(vec2 pixel) {
@@ -793,6 +879,7 @@ function collectUniforms(shaderProgram) {
     "uSeed",
     "uBody",
     "uMoons",
+    "uMoonData[0]",
     "uPalette[0]",
     "uZoom",
     "uLightX",
@@ -892,6 +979,7 @@ function draw(timeSeconds = simulationSeconds, turn = rotationPhase, target = nu
   gl.uniform1f(uniforms.uSeed, Number(state.seed) || 1);
   gl.uniform1i(uniforms.uBody, Number(state.body));
   gl.uniform1i(uniforms.uMoons, Number(state.moons));
+  gl.uniform4fv(uniforms["uMoonData[0]"], moonOrbitVectors(state, timeSeconds));
   gl.uniform3fv(uniforms["uPalette[0]"], palette);
   gl.uniform1f(uniforms.uZoom, Number(state.zoom));
   gl.uniform1f(uniforms.uLightX, Number(state.lightX));

@@ -175,3 +175,21 @@ GIF is a compatibility format: its palette is limited to 256 colors and alpha
 is either visible or transparent. APNG is the recommended high-quality option
 for transparent pixel planets. All animation preferences remain local to the
 browser; they do not modify the preview, planet share codes or undo history.
+
+
+## Illustrated moon rendering
+
+Moons use a lightweight, seeded WebGL surface shader with four material families
+(rock, ice, iron-rich regolith and basalt), circular impact basins, thin
+directionally lit crater rims, stepped day/night shading, and subtly varied
+relative sizes. Moon geometry remains entirely procedural without external
+textures or asset downloads.
+
+Orbital positions use golden-angle phase offsets, projected orbit depth
+and slower motion for more distant moons; front/back passes still let moons
+travel behind the main planet. Existing Moons, Moon spread, Moon tilt,
+Moon speed and Moon size controls remain compatible with saved planets, share
+codes, PNG, spritesheets and transparent animations. Moon rendering is skipped
+when an export explicitly excludes moons.
+
+Moon orbital positions are now calculated once per frame on the CPU and uploaded as a small uniform array, avoiding repeated orbit trigonometry across background fragments.

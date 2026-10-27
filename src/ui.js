@@ -26,8 +26,8 @@ export function renderApp(root) {
           <div class="toolbar" aria-label="Quick actions">
             ${toolbarActions.map(([action, label, variant]) => `
               <button type="button" class="${variant ? "button-primary" : ""}" data-action="${action}"${shortcutAttrs(action)}>${label}</button>
+              ${action === "rerollSeed" ? `<button type="button" class="shortcuts-trigger" data-shortcuts-open aria-haspopup="dialog" aria-controls="shortcuts-dialog" title="Keyboard shortcuts (?)" aria-label="Show keyboard shortcuts">?</button>` : ""}
             `).join("")}
-            <button type="button" class="shortcuts-trigger" data-shortcuts-open aria-haspopup="dialog" aria-controls="shortcuts-dialog" title="Keyboard shortcuts (?)" aria-label="Show keyboard shortcuts">?</button>
           </div>
         </div>
 

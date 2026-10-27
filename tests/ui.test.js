@@ -126,3 +126,15 @@ test("adds compact FPS, resolution, history, and timeline controls", () => {
   ]) assert.ok(html.includes(target), `Missing ${target}`);
   assert.doesNotMatch(html, /<nav\\b|class="site-header"/);
 });
+
+test("toolbar help remains next to seed actions and undo/redo stay adjacent", () => {
+  const root = { innerHTML: "" };
+  renderApp(root);
+  const actions = [...root.innerHTML.matchAll(/data-action="([^"]+)"/g)].map((x) => x[1]);
+  const helper = root.innerHTML.indexOf("data-shortcuts-open");
+  const seed = root.innerHTML.indexOf('data-action="rerollSeed"');
+  const undo = root.innerHTML.indexOf('data-action="undo"');
+  const redo = root.innerHTML.indexOf('data-action="redo"');
+  assert.ok(seed < helper && helper < undo && undo < redo);
+  assert.ok(actions.indexOf("redo") - actions.indexOf("undo") === 1);
+});

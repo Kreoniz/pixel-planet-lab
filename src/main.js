@@ -149,87 +149,155 @@ mat2 rotate2(float a) {
   return mat2(c, -s, s, c);
 }
 
+// Coastlines start from a continent-scale field. Small detail perturbs the
+// borders; it does not replace the underlying landmass with visual noise.
 float surfaceHeight(vec3 p) {
-  float broad = fbm(p * (2.2 + uTerrain * 6.5) + vec3(uSeed, 0.0, 0.0));
-  float fine = fbm(p * (12.0 + uRoughness * 42.0) + vec3(0.0, uSeed, 0.0));
-  float ridges = abs(fbm(p * 9.0 + vec3(uSeed * 0.7)) - 0.5) * 2.0;
-  float h = mix(broad, fine, 0.18 + uRoughness * 0.35);
-  h = mix(h, max(h, ridges), uTerrain * 0.25);
-  return clamp(pow(h, mix(1.65, 0.68, uTerrain)), 0.0, 1.0);
+  float continent = fbm(p * (1.2 + uTerrain * 1.1) + vec3(uSeed * 0.13, 0.0, 0.0));
+  float detail = noise(p * (5.0 + uRoughness * 6.0) + vec3(0.0, uSeed * 0.19, 0.0));
+  float ridge = 1.0 - abs(noise(p * (8.0 + uTerrain * 4.0) + vec3(0.0, 0.0, uSeed * 0.17)) - 0.5) * 2.0;
+  float h = continent * 0.78 + detail * 0.22 + (ridge - 0.5) * uRoughness * 0.06;
+  return clamp(pow(max(h, 0.0), mix(1.18, 0.84, uTerrain)), 0.0, 1.0);
 }
 
 Surface rockySurface(vec3 p) {
   Surface s;
   float h = surfaceHeight(p);
   float waterLine = clamp(uWater, 0.03, 0.95);
-  float shore = smoothstep(waterLine - 0.04, waterLine + 0.035, h);
-  float coast = smoothstep(waterLine - 0.025, waterLine + 0.02, h) * (1.0 - smoothstep(waterLine + 0.025, waterLine + 0.09, h));
-  float high = smoothstep(min(waterLine + 0.08, 0.99), 1.0, h);
-  float mountain = smoothstep(0.62, 0.98, h);
-  float moisture = fbm(p * 5.2 + vec3(uSeed * 0.31, 4.0, 0.0));
-  float iceCap = clamp(smoothstep(0.48, 0.94, abs(p.y) + uIce * 0.46) + smoothstep(0.8, 1.0, h) * uIce * 0.45, 0.0, 1.0);
+  float shore = smoothstep(waterLine - 0.035, waterLine + 0.035, h);
+  float coast = 1.0 - smoothstep(0.008, 0.058, abs(h - waterLine));
+  float high = smoothstep(min(0.82, waterLine + 0.08), min(0.99, waterLine + 0.32), h);
+  float mountain = smoothstep(0.57, 0.84, h);
+  float moisture = noise(p * 4.3 + vec3(uSeed * 0.31, 4.0, 0.0));
+  float iceCap = clamp(smoothstep(0.52, 0.92, abs(p.y) + uIce * 0.17) +
+      smoothstep(0.66, 0.92, h) * uIce * 0.35, 0.0, 1.0);
 
-  vec3 sea = mix(uPalette[0] * 0.85, uPalette[1], smoothstep(waterLine - 0.26, waterLine + 0.02, h));
-  sea = mix(sea, uPalette[5], coast * 0.14);
-  vec3 plains = mix(uPalette[2] * 0.9, uPalette[3], moisture * 0.28 + high * 0.24);
-  vec3 land = mix(plains, mix(uPalette[3], uPalette[4] * 0.82, mountain), mountain);
-  land = mix(land, uPalette[3] * 1.1, coast * 0.5);
+  vec3 sea = mix(uPalette[0] * 0.8, uPalette[1],
+      smoothstep(waterLine - 0.3, waterLine + 0.07, h));
+  if (uBody == 4) {
+    // Ocean worlds need readable mid-tones, not a nearly black blue sphere.
+    sea = mix(uPalette[1] * 0.92, uPalette[2] * 0.94,
+        0.22 + 0.48 * smoothstep(0.18, 0.9, h));
+  }
+  sea = mix(sea, uPalette[5], coast * (uBody == 4 ? 0.22 : 0.13));
+
+  float wetness = smoothstep(0.27, 0.76, moisture);
+  vec3 plains = mix(uPalette[3] * 0.83, uPalette[2], wetness);
+  plains = mix(plains, uPalette[3], high * 0.16);
+  vec3 peaks = mix(uPalette[3], uPalette[4] * 0.87, mountain);
+  vec3 land = mix(plains, peaks, mountain * 0.72);
+  land = mix(land, uPalette[3], coast * 0.54);
   land = mix(land, uPalette[4], iceCap * uIce);
+
   s.color = mix(sea, land, shore);
-  s.color += (h - 0.5) * 0.08 * shore;
   s.height = h;
   s.land = shore;
   s.glow = 0.0;
 
   if (uBody == 2) {
-    s.color = mix(s.color, uPalette[4], 0.45 + iceCap * 0.45);
-    s.land = max(s.land, 0.55);
+    // Frost is layered over underlying relief, with thin blue fractures.
+    s.color = mix(s.color, mix(uPalette[2], uPalette[4], mountain),
+        0.50 + iceCap * 0.38);
+    float fracture = 1.0 - smoothstep(0.022, 0.095,
+        abs(noise(p * 19.0 + vec3(uSeed * 0.11)) - 0.5));
+    s.color = mix(s.color, uPalette[1], fracture * 0.14);
+    s.land = max(s.land, 0.62);
   }
 
   if (uBody == 3) {
-    float crack = smoothstep(0.52, 0.84, fbm(p * (18.0 + uRoughness * 34.0) + vec3(uSeed * 2.0, uTime * 0.08, 0.0)));
-    float trench = smoothstep(0.42, 0.74, abs(fbm(p * 8.0 + vec3(0.0, uSeed, 0.0)) - 0.5) * 2.0);
-    float lava = max(1.0 - shore, crack * trench) * uLava;
-    s.color = mix(s.color * 0.45, vec3(1.0, 0.2, 0.04), lava);
+    // Thin connected hot contours read like fissures at sprite resolution.
+    float cracks = 1.0 - smoothstep(0.028, 0.125, abs(noise(
+        p * (9.0 + uRoughness * 8.0) + vec3(uSeed * 0.17, uTime * 0.015, 0.0)) - 0.5));
+    float flow = smoothstep(0.22, 0.72,
+        noise(p * 4.7 + vec3(0.0, uSeed * 0.37, 0.0)));
+    float lava = max((1.0 - shore) * 0.8, cracks * flow) * uLava;
+    s.color = mix(s.color * 0.27, vec3(1.0, 0.29, 0.055), lava);
+    s.color += vec3(0.12, 0.025, 0.0) * lava;
     s.glow = lava;
   }
 
   if (uBody == 4) {
-    s.color = mix(sea, land, shore * 0.45);
-    s.land *= 0.42;
+    float swell = noise(p * 15.0 + vec3(uSeed * 0.41, 0.0, uTime * 0.012));
+    s.color = mix(sea, land, shore * 0.3);
+    s.color += uPalette[5] * (swell - 0.5) * 0.09 * (1.0 - shore);
+    s.land = shore * 0.32;
   }
 
   if (uBody == 5) {
-    s.color = mix(uPalette[1], uPalette[3], h);
-    s.color = mix(s.color, uPalette[4], smoothstep(0.72, 0.98, h) * 0.22);
+    s.color = mix(uPalette[1] * 0.87, uPalette[3], h);
+    s.color = mix(s.color, uPalette[4], smoothstep(0.64, 0.94, h) * 0.20);
     s.land = 1.0;
-  }
-
-  if (uBody == 6) {
-    float acid = smoothstep(0.25, 0.78, fbm(p * 6.0 + vec3(0.0, uSeed * 0.4, uTime * 0.05)));
-    s.color = mix(uPalette[1], uPalette[3], acid);
-    s.color = mix(s.color, uPalette[5], smoothstep(0.68, 0.95, acid) * 0.35);
-    s.land = shore;
   }
 
   return s;
 }
 
+// A distinct toxic atmosphere: broad swirling weather systems carry finer
+// turbulent clouds and mineral aerosols. Three scales avoid the smooth
+// oversized patches produced by one low-frequency noise sample.
+Surface toxicSurface(vec3 p) {
+  Surface s;
+  vec3 seedPos = vec3(uSeed * 0.013, uSeed * 0.021, uSeed * 0.017);
+  float drift = uTime * 0.018;
+
+  float broad = noise(p * 3.3 + seedPos + vec3(0.0, drift, 0.0));
+  float curl = noise(p * 5.8 + seedPos * 1.37 + vec3(drift, 0.0, 3.1));
+  float swirl = noise(p * 7.1 + seedPos * 0.83 + vec3(1.9, -drift, 0.0));
+  vec3 warped = p + vec3(curl - 0.5, broad - 0.5, swirl - 0.5) *
+      (0.18 + uRoughness * 0.12);
+
+  float medium = fbm(warped * (6.8 + uTerrain * 3.5) +
+      seedPos * 0.43 + vec3(0.0, drift * 0.45, 0.0));
+  float small = noise(warped * (15.0 + uRoughness * 11.0) +
+      seedPos * 1.49 + vec3(0.0, drift, 0.0));
+  float detail = noise(warped * 32.0 + seedPos * 2.73);
+  float streaks = sin(warped.y * 26.0 + broad * 4.6 +
+      medium * 3.1 + warped.x * 2.9);
+
+  float weather = broad * 0.36 + medium * 0.31 + small * 0.19 +
+      (streaks * 0.5 + 0.5) * 0.14;
+  vec3 depths = mix(uPalette[0] * 0.78, uPalette[1], 0.43);
+  vec3 middle = mix(uPalette[1], uPalette[2], 0.35);
+  vec3 highlights = mix(uPalette[3], uPalette[4], 0.36);
+  s.color = mix(depths, middle, smoothstep(0.29, 0.66, weather));
+  s.color = mix(s.color, highlights,
+      smoothstep(0.62, 0.89, weather) * 0.67);
+
+  // Fine wisps are grouped by weather rather than painted everywhere.
+  float aerosols = smoothstep(0.58, 0.80, small * 0.64 + detail * 0.36);
+  s.color = mix(s.color, uPalette[5],
+      aerosols * smoothstep(0.39, 0.64, weather) *
+      (0.07 + uStorm * 0.20));
+  s.color *= 0.87 + medium * 0.19;
+  s.height = weather;
+  s.land = 1.0;
+  s.glow = 0.0;
+  return s;
+}
+
 Surface gasSurface(vec3 p) {
   Surface s;
-  float lat = p.y;
-  float warp = fbm(p * 4.0 + vec3(uSeed, uTime * 0.05, 0.0));
-  float bands = sin((lat * (18.0 + uTerrain * 24.0) + warp * 3.1 + uSeed) * 3.14159);
-  float stripe = smoothstep(0.16, 0.86, bands * 0.5 + 0.5);
-  float soft = fbm(vec3(lat * 10.0, p.x * 2.0 + uTime * 0.12, uSeed));
-  float eddy = fbm(p * 15.0 + vec3(uSeed * 0.2, uTime * 0.18, 3.0));
-  s.color = mix(uPalette[1] * 0.86, uPalette[3], stripe);
-  s.color = mix(s.color, uPalette[4], soft * 0.2 + eddy * uStorm * 0.16);
+  float warp = fbm(p * vec3(2.6, 3.6, 2.6) +
+      vec3(uSeed * 0.37, uTime * 0.03, 0.0));
+  // Broad flowing belts stay coherent as the globe rotates.
+  float lat = p.y + (warp - 0.5) * 0.11;
+  float major = sin(lat * (19.0 + uTerrain * 11.0) + uSeed * 0.3);
+  float minor = sin(lat * (39.0 + uTerrain * 19.0) + warp * 1.8);
+  float stripe = smoothstep(-0.45, 0.55, major * 0.78 + minor * 0.22);
+  vec3 darkBelt = mix(uPalette[1] * 0.9, uPalette[2], 0.19 + 0.22 * warp);
+  vec3 brightBelt = mix(uPalette[3], uPalette[4], 0.18 + 0.20 * warp);
+  s.color = mix(darkBelt, brightBelt, stripe);
 
-  vec2 spot = vec2(p.x + 0.36 + sin(uSeed) * 0.1, p.y - 0.08);
-  float storm = exp(-dot(spot / vec2(0.34, 0.15), spot / vec2(0.34, 0.15)) * 4.0);
-  s.color = mix(s.color, uPalette[5], storm * uStorm);
-  s.height = soft;
+  float turbulence = noise(p * 10.5 + vec3(uSeed * 0.23, uTime * 0.06, 0.0));
+  s.color = mix(s.color, uPalette[4], turbulence * uStorm * 0.12);
+
+  // A shaped vortex with a bright outer spiral and a darker quiet eye.
+  vec2 spot = vec2(p.x + 0.32 + sin(uSeed) * 0.08, p.y - 0.10);
+  float r = length(spot / vec2(0.36, 0.19));
+  float swirl = 0.5 + 0.5 * sin(atan(spot.y, spot.x) * 2.0 - r * 10.0 + uTime * 0.14);
+  float vortex = (1.0 - smoothstep(0.20, 0.95, r)) * uStorm;
+  s.color = mix(s.color, mix(uPalette[4], uPalette[5], swirl * 0.58), vortex * 0.67);
+  s.color = mix(s.color, uPalette[1], (1.0 - smoothstep(0.04, 0.30, r)) * vortex * 0.68);
+  s.height = turbulence;
   s.land = 1.0;
   s.glow = 0.0;
   return s;
@@ -237,10 +305,12 @@ Surface gasSurface(vec3 p) {
 
 Surface starSurface(vec3 p) {
   Surface s;
-  float plasma = fbm(p * (8.0 + uRoughness * 18.0) + vec3(uSeed, uTime * 0.32, 0.0));
-  float flare = smoothstep(0.54, 0.98, fbm(p * 22.0 + vec3(0.0, uSeed, uTime * 0.8)));
-  s.color = mix(uPalette[2], uPalette[4], plasma);
-  s.color += uPalette[5] * flare * (0.35 + uStorm);
+  float plasma = fbm(p * (6.8 + uRoughness * 14.0) +
+      vec3(uSeed, uTime * 0.28, 0.0));
+  float flare = smoothstep(0.50, 0.91,
+      fbm(p * 18.0 + vec3(0.0, uSeed, uTime * 0.65)));
+  s.color = mix(uPalette[2], uPalette[4], smoothstep(0.19, 0.83, plasma));
+  s.color += uPalette[5] * flare * (0.30 + uStorm * 0.85);
   s.height = plasma;
   s.land = 1.0;
   s.glow = 1.0;
@@ -259,6 +329,7 @@ Surface blackHoleSurface(vec3 p) {
 
 Surface getSurface(vec3 p) {
   if (uBody == 1) return gasSurface(p);
+  if (uBody == 6) return toxicSurface(p);
   if (uBody == 7) return starSurface(p);
   if (uBody == 8) return blackHoleSurface(p);
   return rockySurface(p);
@@ -288,16 +359,20 @@ Ring getRing(vec2 uv, float radius) {
 }
 
 vec3 background(vec2 uv) {
-  vec3 color = vec3(0.025, 0.024, 0.026);
+  // Sparse, stable stars rather than per-pixel static behind a tiny sprite.
+  vec3 color = vec3(0.016, 0.022, 0.029);
   float grid = hash12(floor(gl_FragCoord.xy) + uSeed);
-  float star = step(1.0 - uStars * 0.028, grid);
-  float bright = step(1.0 - uStars * 0.004, hash12(floor(gl_FragCoord.xy / 2.0) + uSeed * 7.0));
-  color += star * vec3(0.75, 0.79, 0.88);
-  color += bright * uPalette[5] * 0.65;
+  float density = (uBody == 0 || uBody == 4) ? 0.45 : 1.0;
+  float star = step(1.0 - uStars * density * 0.012, grid);
+  float bright = step(1.0 - uStars * density * 0.002,
+      hash12(floor(gl_FragCoord.xy / 2.0) + uSeed * 7.0));
+  color += star * vec3(0.54, 0.65, 0.72);
+  color += bright * mix(vec3(0.58, 0.71, 0.84), uPalette[5], 0.33) * 0.60;
 
   if (uBody == 8) {
     Ring disk = getRing(uv, 0.46);
-    color = mix(color, uPalette[3] * 1.25 + uPalette[5] * 0.45, disk.mask * 0.9);
+    color = mix(color, uPalette[3] * 0.83 + uPalette[5] * 0.35,
+        disk.mask * 0.82);
   }
 
   return color;
@@ -332,11 +407,115 @@ vec3 drawMoons(vec3 color, vec2 uv, float radius, vec3 light, float frontPass) {
   return color;
 }
 
+// A fixed 4x4 Bayer threshold map, expressed without dynamic array indexing.
+float bayer4(vec2 pixel) {
+  vec2 cell = mod(floor(pixel), 4.0);
+  vec2 lowCell = mod(cell, 2.0);
+  vec2 highCell = floor(cell * 0.5);
+  float low = 2.0 * lowCell.x + 3.0 * lowCell.y - 4.0 * lowCell.x * lowCell.y;
+  float high = 2.0 * highCell.x + 3.0 * highCell.y - 4.0 * highCell.x * highCell.y;
+  return (low * 4.0 + high + 0.5) / 16.0;
+}
+
+// Illustrative layers inspired by Deep-Fold/PixelPlanets (MIT, 2020).
+// The water, land, and clouds select independent, discrete material colors.
+vec3 illustratedSurface(vec3 p, vec3 normal, vec3 light, float turn) {
+  vec3 seedPos = vec3(uSeed * 0.019, uSeed * 0.027, uSeed * 0.013);
+  float lighting = dot(normal, light);
+  float dither = (bayer4(gl_FragCoord.xy) - 0.5) * uDither * 0.17;
+  float band = lighting + dither - (uShade - 0.5) * 0.08;
+
+  // Water: three hand-picked shade groups, not an interpolated noise texture.
+  vec3 oceanShade = mix(uPalette[0], uPalette[5], 0.42);
+  vec3 water = band < -0.26 ? oceanShade :
+      (band > 0.43 ? mix(uPalette[1], uPalette[4], 0.13) : uPalette[1]);
+
+  // Land: coherent continent shapes, with higher frequencies only for edges.
+  float continent = fbm(p * (2.15 + uTerrain * 0.85) + seedPos);
+  float fine = noise(p * (4.0 + uRoughness * 6.0) + seedPos * 2.0);
+  float height = continent * 0.84 + fine * 0.16;
+  float landCutoff = mix(0.42, 0.60, uWater);
+  float landMask = step(landCutoff, height);
+  // Shallow water outlines larger continents with a single flat tint.
+  if (landMask < 0.5 && height > landCutoff - 0.055 &&
+      band > -0.29)
+    water = mix(uPalette[1], uPalette[5], 0.40);
+
+  vec3 landShade = mix(uPalette[0], uPalette[5], 0.72);
+  vec3 landSun = mix(uPalette[2], uPalette[4], 0.14);
+  vec3 land = band < -0.29 ? landShade :
+      (band > 0.40 ? landSun : uPalette[2]);
+  float biome = noise(p * 6.5 + seedPos + vec3(3.0, 9.0, 2.0));
+  if (biome > 0.68 && band > -0.24)
+    land = mix(uPalette[2], uPalette[5], 0.31);
+  if (biome < 0.29 && band > 0.06) land = landShade;
+  if (biome > 0.58 && biome < 0.66 && band > 0.17)
+    land = mix(uPalette[2], uPalette[4], 0.19);
+  // Broad, sparse highland patches instead of contour-map rings.
+  if (height > landCutoff + 0.08 && band > -0.22) {
+    float highland = noise(p * (7.0 + uRoughness * 4.0) +
+        seedPos + vec3(2.0, 5.0, 8.0));
+    if (highland > 0.72)
+      land = mix(uPalette[2], uPalette[0], 0.23);
+  }
+  if (uIce > 0.0) {
+    float frost = abs(p.y) + uIce * 0.19 +
+        noise(p * 4.4 + seedPos + 14.0) * 0.08;
+    if (frost > 0.94 && landMask > 0.5)
+      land = mix(uPalette[4], uPalette[3], 0.20);
+  }
+
+  vec3 color = mix(water, land, landMask);
+  if (uCity > 0.0 && band < -0.26 && landMask > 0.5) {
+    float settlement = noise(p * 25.0 + seedPos + 8.0);
+    if (settlement > mix(0.91, 0.76, uCity))
+      color = mix(uPalette[4], vec3(1.0, 0.71, 0.36), 0.44);
+  }
+
+  // Compact painterly cloud clusters. Use 3D spherical coordinates so
+  // cloud shapes rotate naturally without enormous projected bands.
+  if (uClouds > 0.0) {
+    vec3 cp = rotateY(p, uTime * uCloudSpeed * 0.045);
+    vec3 offsets = seedPos * 0.53 + vec3(8.7, 2.4, 4.1);
+
+    // Soft low-frequency warp groups clouds into asymmetric weather systems.
+    float driftX = noise(cp * 1.8 + offsets);
+    float driftY = noise(cp * 2.2 + offsets + 12.0);
+    vec3 weather = cp * vec3(2.8, 3.5, 2.9) +
+        vec3((driftX - 0.5) * 1.25, (driftY - 0.5) * 0.85, 0.0);
+    float large = noise(weather + offsets * 0.12);
+    float small = noise(weather * 2.25 + offsets + 3.2);
+    float cloudField = large * 0.76 + small * 0.24;
+
+    // Higher cover settings add *more independent clusters* rather than
+    // making one large front wider until it blankets the hemisphere.
+    float cutoff = mix(0.77, 0.53, uClouds);
+    float jitter = (bayer4(gl_FragCoord.xy) - 0.5) * uDither * 0.042;
+    float cloudMask = step(cutoff + jitter, cloudField);
+    float brightCore = step(cutoff + 0.085, cloudField);
+    float shadowEdge = step(cutoff - 0.045 + jitter, cloudField) -
+        cloudMask;
+
+    vec3 cloudShadow = mix(uPalette[0], vec3(0.65, 0.73, 0.76), 0.80);
+    vec3 cloudBright = mix(uPalette[4], vec3(0.93, 0.97, 0.93), 0.88);
+    // One subdued shadow band and two deliberately chosen cloud shades.
+    if (band > -0.34) color = mix(color, cloudShadow, shadowEdge * 0.19);
+    vec3 cloudTint = band < -0.24 ? cloudShadow :
+        (brightCore > 0.5 ? cloudBright : mix(cloudShadow, cloudBright, 0.62));
+    color = mix(color, cloudTint, cloudMask * 0.86);
+  }
+
+  // A narrow painted outline keeps the spherical silhouette crisp.
+  if (length(normal.xy) > 0.975)
+    color = mix(color, uPalette[0], 0.67);
+  return color;
+}
+
 void main() {
   vec2 uv = gl_FragCoord.xy / uResolution * 2.0 - 1.0;
   uv.x *= uResolution.x / uResolution.y;
 
-  float radius = 0.68 * uZoom;
+  float radius = ((uBody == 0 || uBody == 4) && uRings < 0.5 ? 0.84 : 0.68) * uZoom;
   vec3 light = normalize(vec3(uLightX, -uLightY, 0.9));
   vec3 color = background(uv);
 
@@ -357,37 +536,72 @@ void main() {
     vec3 p = rotateY(normal, turn);
     p = rotateX(p, sin(uSeed) * 0.22);
 
+    if (uBody == 0 || uBody == 4) {
+      color = illustratedSurface(p, normal, light, turn);
+    } else {
     Surface surf = getSurface(p);
-    float lit = clamp(dot(normal, light), 0.0, 1.0);
-    float night = 1.0 - smoothstep(-0.16, 0.34, lit);
-    float rim = pow(1.0 - normal.z, 2.2);
+    float ndl = dot(normal, light);
+    float lit = max(ndl, 0.0);
+    float daylight = smoothstep(-0.17, 0.23, ndl);
+    float night = 1.0 - smoothstep(-0.08, 0.25, ndl);
+    float rim = pow(1.0 - normal.z, 2.65);
 
     if (uBody != 7) {
-      float ambient = mix(0.78, 0.18, uShade);
-      color = surf.color * (ambient + lit * (1.04 + uShade * 0.4));
-      float waterSpec = pow(max(dot(reflect(-light, normal), vec3(0.0, 0.0, 1.0)), 0.0), 18.0);
-      color += uPalette[5] * waterSpec * (1.0 - surf.land) * (0.16 + uWater * 0.18);
-      color *= 0.94 + surf.height * 0.12;
+      float ambient = mix(0.43, 0.16, uShade);
+      float direct = daylight * (0.39 + lit * 0.81);
+      color = surf.color * (ambient + direct);
+      // Restrict watery highlights to bodies that actually have oceans.
+      if (uBody != 1 && uBody != 5 && uBody != 8) {
+        float spec = pow(max(dot(reflect(-light, normal),
+            vec3(0.0, 0.0, 1.0)), 0.0), 24.0);
+        float waterMask = 1.0 - surf.land;
+        color += uPalette[5] * spec * waterMask * daylight *
+            (0.29 + uWater * 0.39);
+      }
+      color *= 0.95 + surf.height * 0.10;
     } else {
-      color = surf.color * (1.0 + rim * 0.55);
+      color = surf.color * (1.08 + rim * 0.34);
     }
 
     if (uCity > 0.0 && uBody != 1 && uBody != 7 && uBody != 8) {
-      float cityNet = smoothstep(0.68, 0.94, fbm(p * 28.0 + vec3(uSeed * 1.7)));
-      color += vec3(1.0, 0.63, 0.25) * cityNet * surf.land * night * uCity * 1.5;
+      float cityNet = smoothstep(0.71, 0.95, fbm(p * 28.0 + vec3(uSeed * 1.7)));
+      color += vec3(1.0, 0.63, 0.25) * cityNet * surf.land * night * uCity * 1.3;
     }
 
     if (uClouds > 0.0 && uBody != 1 && uBody != 7 && uBody != 8) {
       vec3 cp = rotateY(normal, turn * 1.12 + uTime * uCloudSpeed * 0.25);
-      float cloud = fbm(cp * (5.0 + uRoughness * 13.0) + vec3(0.0, uSeed, uTime * uCloudSpeed * 0.18));
-      float mask = smoothstep(1.0 - uClouds * 0.72, 1.0, cloud);
-      vec3 cloudColor = mix(vec3(0.78), uPalette[4], 0.35) * (0.42 + lit * 0.78);
-      color = mix(color, cloudColor, mask * (0.25 + uClouds * 0.5));
+      if (uBody == 6) {
+        // Small atmospheric wisps, not another large blurry cloud mask.
+        float haze = noise(cp * (10.5 + uRoughness * 5.0) +
+            vec3(uSeed * 0.13, uTime * uCloudSpeed * 0.07, 0.0));
+        float flecks = noise(cp * 25.0 +
+            vec3(4.0, uSeed * 0.09, uTime * uCloudSpeed * 0.10));
+        float currents = noise(cp * vec3(5.0, 19.0, 5.0) +
+            vec3(uSeed * 0.12, 0.0, uTime * 0.025));
+        float coverage = smoothstep(mix(0.78, 0.59, uClouds), 0.88,
+            haze * 0.53 + flecks * 0.22 + currents * 0.25);
+        vec3 mist = mix(uPalette[2], uPalette[4], 0.54) *
+            (0.37 + daylight * 0.59);
+        color = mix(color, mist, coverage * uClouds * 0.48);
+      } else {
+        float cloud = fbm(cp * (5.0 + uRoughness * 10.0) +
+            vec3(0.0, uSeed, uTime * uCloudSpeed * 0.18));
+        float coverage = smoothstep(mix(0.80, 0.56, uClouds), 0.93, cloud);
+        color *= 1.0 - coverage * 0.14 * daylight;
+        vec3 cloudColor = mix(uPalette[4], vec3(0.94, 0.96, 0.97), 0.32) *
+            (0.27 + daylight * 0.72);
+        color = mix(color, cloudColor, coverage * (0.27 + uClouds * 0.49));
+      }
     }
 
-    color += uPalette[5] * rim * uAtmosphere * (0.22 + 0.35 * surf.glow);
-    color += vec3(1.0, 0.22, 0.06) * surf.glow * 0.45;
+    float sunward = clamp(0.45 + ndl * 0.55, 0.0, 1.0);
+    color += uPalette[5] * rim * uAtmosphere *
+        (0.07 + 0.23 * sunward + 0.28 * surf.glow);
+    color += vec3(1.0, 0.24, 0.06) * surf.glow * 0.37;
+    }
   }
+
+
 
   float frontRing = ring.mask * rings * ring.front;
   if (frontRing > 0.0) {
@@ -395,21 +609,27 @@ void main() {
     color = mix(color, ring.color * dimBehindPlanet, frontRing);
   }
 
-  if (d > radius) {
-    float halo = 1.0 - smoothstep(radius, radius * (1.28 + uAtmosphere * 0.25), d);
-    float starBoost = step(6.5, float(uBody));
-    color += uPalette[5] * halo * uAtmosphere * (0.16 + starBoost * 0.52);
+  if (d > radius && uAtmosphere > 0.0) {
+    float outerHalo = radius * (1.17 + uAtmosphere * 0.19);
+    // Skip expensive halo lighting over the large empty sky region.
+    if (d < outerHalo) {
+      float halo = 1.0 - smoothstep(radius * 1.005, outerHalo, d);
+      float side = clamp(0.55 + dot(normalize(uv), light.xy) * 0.44, 0.0, 1.0);
+      float starBoost = step(6.5, float(uBody));
+      color += uPalette[5] * halo * halo * uAtmosphere *
+          (0.10 + 0.22 * side + starBoost * 0.34);
+    }
   }
 
   color = drawMoons(color, uv, radius, light, 1.0);
 
-  float grain = (hash12(gl_FragCoord.xy + uSeed) - 0.5) * uDither * 0.08;
-  color += grain;
-  color = clamp(color, 0.0, 1.0);
-  color = pow(color, vec3(0.92));
-  color = mix(color, color * color * (3.0 - 2.0 * color), 0.12);
-  color = floor(color * 20.0) / 20.0;
-  outColor = vec4(color, 1.0);
+  if (uBody != 0 && uBody != 4) {
+    color = clamp(color, 0.0, 1.0);
+    color = pow(color, vec3(0.94));
+    float offset = (bayer4(gl_FragCoord.xy) - 0.5) * uDither * 0.72;
+    color = floor(color * 26.0 + 0.5 + offset) / 26.0;
+  }
+  outColor = vec4(clamp(color, 0.0, 1.0), 1.0);
 }`;
 
 let program;

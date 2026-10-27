@@ -1,5 +1,5 @@
 export const palettes = {
-  aurora: ["#101c2e", "#1f5f84", "#498d65", "#c8b16b", "#f2f0df", "#82d9bd"],
+  aurora: ["#2c3842", "#50a2b7", "#63a941", "#686f98", "#f5ffe7", "#335854"],
   ember: ["#20121a", "#642434", "#b44834", "#ef8f39", "#ffd17d", "#ff674d"],
   reef: ["#062033", "#0b638a", "#269a91", "#8fc878", "#f0e4a8", "#7fdff0"],
   dust: ["#231d1a", "#5c3d30", "#a76a43", "#d6a968", "#eadfb9", "#e26d5a"],
@@ -10,14 +10,14 @@ export const palettes = {
 
 export const presets = {
   terrestrial: { body: 0, palette: "aurora", water: 0.49, terrain: 0.62, roughness: 0.54, clouds: 0.35, ice: 0.28, lava: 0, city: 0.18, rings: false, ringRadius: 0.22, ringTilt: 0.5, ringAngle: 0.08, ringWidth: 0.42, ringOpacity: 0.65, ringGaps: 0.45, ringDetail: 0.68, moons: 1, moonSpread: 0.42, moonTilt: 0.38, moonSpeed: 0.35, moonSize: 0.45, storm: 0.18, atmosphere: 0.62 },
-  gas: { body: 1, palette: "dust", water: 0.45, terrain: 0.5, roughness: 0.45, clouds: 0.2, ice: 0, lava: 0, city: 0, rings: true, ringRadius: 0.16, ringTilt: 0.42, ringAngle: 0.04, ringWidth: 0.62, ringOpacity: 0.78, ringGaps: 0.62, ringDetail: 0.78, moons: 4, moonSpread: 0.68, moonTilt: 0.44, moonSpeed: 0.45, moonSize: 0.42, storm: 0.75, atmosphere: 0.72 },
+  gas: { body: 1, palette: "dust", water: 0.45, terrain: 0.5, roughness: 0.45, clouds: 0.2, ice: 0, lava: 0, city: 0, rings: true, ringRadius: 0.16, ringTilt: 0.42, ringAngle: 0.56, ringWidth: 0.62, ringOpacity: 0.78, ringGaps: 0.62, ringDetail: 0.78, moons: 4, moonSpread: 0.68, moonTilt: 0.44, moonSpeed: 0.45, moonSize: 0.42, storm: 0.75, atmosphere: 0.72 },
   ice: { body: 2, palette: "glacier", water: 0.38, terrain: 0.4, roughness: 0.5, clouds: 0.25, ice: 0.92, lava: 0, city: 0.03, rings: false, ringRadius: 0.26, ringTilt: 0.36, ringAngle: 0.94, ringWidth: 0.34, ringOpacity: 0.52, ringGaps: 0.36, ringDetail: 0.52, moons: 2, moonSpread: 0.52, moonTilt: 0.32, moonSpeed: 0.28, moonSize: 0.38, storm: 0.18, atmosphere: 0.48 },
   lava: { body: 3, palette: "ember", water: 0.24, terrain: 0.75, roughness: 0.82, clouds: 0.1, ice: 0, lava: 0.9, city: 0, rings: false, ringRadius: 0.2, ringTilt: 0.5, ringAngle: 0.08, ringWidth: 0.36, ringOpacity: 0.5, ringGaps: 0.5, ringDetail: 0.7, moons: 1, moonSpread: 0.48, moonTilt: 0.34, moonSpeed: 0.5, moonSize: 0.34, storm: 0.25, atmosphere: 0.38 },
   ocean: { body: 4, palette: "reef", water: 0.78, terrain: 0.34, roughness: 0.34, clouds: 0.48, ice: 0.15, lava: 0, city: 0.08, rings: false, ringRadius: 0.22, ringTilt: 0.58, ringAngle: 0.1, ringWidth: 0.4, ringOpacity: 0.52, ringGaps: 0.28, ringDetail: 0.45, moons: 1, moonSpread: 0.4, moonTilt: 0.42, moonSpeed: 0.32, moonSize: 0.42, storm: 0.36, atmosphere: 0.68 },
   desert: { body: 5, palette: "dust", water: 0.16, terrain: 0.68, roughness: 0.44, clouds: 0.08, ice: 0.03, lava: 0, city: 0.05, rings: false, ringRadius: 0.24, ringTilt: 0.36, ringAngle: 0.9, ringWidth: 0.48, ringOpacity: 0.56, ringGaps: 0.72, ringDetail: 0.8, moons: 2, moonSpread: 0.56, moonTilt: 0.28, moonSpeed: 0.34, moonSize: 0.36, storm: 0.22, atmosphere: 0.44 },
-  toxic: { body: 6, palette: "sulfur", water: 0.45, terrain: 0.52, roughness: 0.62, clouds: 0.78, ice: 0, lava: 0.22, city: 0, rings: true, ringRadius: 0.18, ringTilt: 0.56, ringAngle: 0.12, ringWidth: 0.5, ringOpacity: 0.72, ringGaps: 0.54, ringDetail: 0.72, moons: 3, moonSpread: 0.6, moonTilt: 0.5, moonSpeed: 0.46, moonSize: 0.36, storm: 0.58, atmosphere: 0.9 },
+  toxic: { body: 6, palette: "sulfur", water: 0.45, terrain: 0.52, roughness: 0.62, clouds: 0.78, ice: 0, lava: 0.22, city: 0, rings: true, ringRadius: 0.18, ringTilt: 0.56, ringAngle: 0.38, ringWidth: 0.5, ringOpacity: 0.72, ringGaps: 0.54, ringDetail: 0.72, moons: 3, moonSpread: 0.6, moonTilt: 0.5, moonSpeed: 0.46, moonSize: 0.36, storm: 0.58, atmosphere: 0.9 },
   star: { body: 7, palette: "ember", water: 0.1, terrain: 0.7, roughness: 0.85, clouds: 0, ice: 0, lava: 1, city: 0, rings: false, ringRadius: 0.16, ringTilt: 0.52, ringAngle: 0.08, ringWidth: 0.38, ringOpacity: 0.55, ringGaps: 0.4, ringDetail: 0.55, moons: 0, moonSpread: 0.48, moonTilt: 0.36, moonSpeed: 0.4, moonSize: 0.3, storm: 0.55, atmosphere: 1 },
-  blackhole: { body: 8, palette: "mono", water: 0.25, terrain: 0.5, roughness: 0.7, clouds: 0, ice: 0, lava: 0, city: 0, rings: true, ringRadius: 0.02, ringTilt: 0.24, ringAngle: 0.03, ringWidth: 0.92, ringOpacity: 1, ringGaps: 0.18, ringDetail: 0.86, moons: 0, moonSpread: 0.5, moonTilt: 0.2, moonSpeed: 0.25, moonSize: 0.28, storm: 0, atmosphere: 1 },
+  blackhole: { body: 8, palette: "mono", water: 0.25, terrain: 0.5, roughness: 0.7, clouds: 0, ice: 0, lava: 0, city: 0, rings: true, ringRadius: 0.02, ringTilt: 0.24, ringAngle: 0.5, ringWidth: 0.92, ringOpacity: 1, ringGaps: 0.18, ringDetail: 0.86, moons: 0, moonSpread: 0.5, moonTilt: 0.2, moonSpeed: 0.25, moonSize: 0.28, storm: 0, atmosphere: 1 },
 };
 
 export const state = {

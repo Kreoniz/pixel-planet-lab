@@ -1,4 +1,3 @@
-import { HotkeyManager, formatForDisplay } from "@tanstack/hotkeys";
 import { presetButtons } from "./config.js";
 
 // One definition powers registration, button hints, and the help dialog.
@@ -29,8 +28,21 @@ export const presetShortcuts = Object.fromEntries(
   shortcuts.filter(({ preset }) => preset).map(({ preset, hotkey }) => [preset, hotkey]),
 );
 
+const isApple = () => typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+
 export function displayShortcut(hotkey) {
-  return formatForDisplay(hotkey);
+  return hotkey.replace("Mod", isApple() ? "⌘" : "Ctrl");
+}
+
+function matches(event, hotkey, apple) {
+  const keys = hotkey.split("+");
+  const key = keys.at(-1);
+  const mod = keys.includes("Mod");
+  if (event.altKey || Boolean(event.ctrlKey) !== (mod && !apple) ||
+      Boolean(event.metaKey) !== (mod && apple)) return false;
+  // '?' already includes Shift on layouts that need it.
+  if (key !== "?" && Boolean(event.shiftKey) !== keys.includes("Shift")) return false;
+  return event.key?.toUpperCase() === key.toUpperCase();
 }
 
 export function registerEditorHotkeys({
@@ -38,27 +50,22 @@ export function registerEditorHotkeys({
   choosePreset,
   toggleHelp,
   isHelpOpen = () => false,
-  manager = HotkeyManager.getInstance(),
+  isModalOpen = isHelpOpen,
+  target = window,
+  apple = isApple(),
 }) {
-  const handles = shortcuts.map(({ hotkey, action, preset, id }) =>
-    manager.register(
-      hotkey,
-      () => {
-        if (isHelpOpen() && id !== "help") return;
-        if (id === "help") toggleHelp();
-        else if (preset) choosePreset(preset);
-        else if (action) runAction(action);
-      },
-      {
-        // Never hijack typing, numeric inputs, selects, or editable fields.
-        ignoreInputs: true,
-        // Avoid repeated randomization/exports when a key is held.
-        requireReset: true,
-        preventDefault: true,
-        stopPropagation: false,
-      },
-    ),
-  );
-
-  return () => handles.forEach((handle) => handle.unregister());
+  function keydown(event) {
+    if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229) return;
+    const editing = event.composedPath?.() || [event.target];
+    if (editing.some((element) => element?.isContentEditable ||
+        element?.closest?.("input, textarea, select, [contenteditable]:not([contenteditable='false'])"))) return;
+    const shortcut = shortcuts.find(({ hotkey }) => matches(event, hotkey, apple));
+    if (!shortcut || (isModalOpen() && (shortcut.id !== "help" || !isHelpOpen()))) return;
+    event.preventDefault();
+    if (shortcut.id === "help") toggleHelp();
+    else if (shortcut.preset) choosePreset(shortcut.preset);
+    else runAction(shortcut.action);
+  }
+  target.addEventListener("keydown", keydown);
+  return () => target.removeEventListener("keydown", keydown);
 }

@@ -62,7 +62,7 @@ test("nearest moons match parent body geology while outer moons retain variety",
 test("orbital uniforms are packed once per draw rather than per fragment", () => {
   assert.match(source, /import \{ moonOrbitVectors \} from "\.\/moon-orbits\.js"/);
   assert.match(source, /"uMoonData\[0\]"/);
-  assert.match(source, /gl\.uniform4fv\(uniforms\["uMoonData\[0\]"\], moonOrbitVectors\(state, timeSeconds\)\)/);
+  assert.match(source, /gl\.uniform4fv\(uniforms\["uMoonData\[0\]"\], moonOrbitVectors\(planet, timeSeconds\)\)/);
   assert.match(moons, /vec4 orbit = uMoonData\[i\]/);
   assert.doesNotMatch(moons, /vec2 ellipse = vec2\(cos\(a\)/);
 });

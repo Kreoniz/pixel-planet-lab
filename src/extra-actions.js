@@ -5,7 +5,7 @@ import { createFramePlan, runFrameSequence } from "./animation-frames.js";
 export async function exportSheet({
   state, simulationSeconds, rotationPhase, spinSpeed, downloadCanvas,
   setStatus, invalidate, clampInt, createFrameRenderer, exportOptions,
-  animationSettings, yieldControl,
+  animationSettings, yieldControl, signal,
 }) {
   const size = clampInt(state.size, 64, 512);
   const frames = clampInt(state.frames, 1, 96);
@@ -31,13 +31,20 @@ export async function exportSheet({
     await runFrameSequence(plan, (sample, i) => {
       const image = renderer.render(sample.time, sample.turn, exportOptions, sample.seamless);
       ctx.drawImage(image, (i % columns) * size, Math.floor(i / columns) * size, size, size);
-    }, { yieldControl });
+    }, {
+      yieldControl, signal,
+      onProgress(frame, count) {
+        if (frame === 1 || frame === count || frame % 5 === 0)
+          setStatus(`Exporting spritesheet ${frame}/${count}`);
+      },
+    });
 
     const suffix = exportOptions.transparent ? "-transparent" : "";
-    await downloadCanvas(sheet, `planet-${state.seed}-sheet${suffix}.png`);
+    await downloadCanvas(sheet, `planet-${state.seed}-sheet${suffix}.png`, { signal });
+    if (signal?.aborted) throw new Error("Sheet export cancelled");
     setStatus(`Exported ${frames}-frame ${exportOptions.transparent ? "transparent" : "opaque"} spritesheet`);
   } catch (error) {
-    setStatus(`Sheet export failed: ${error?.message || "unknown error"}`);
+    setStatus(signal?.aborted ? "Sheet export cancelled" : `Sheet export failed: ${error?.message || "unknown error"}`);
   } finally {
     renderer?.dispose();
     invalidate();
@@ -115,10 +122,12 @@ async function exportAnimated(format, {
     let blob;
     if (apngFrames) {
       const { encodeApng } = await import("./apng-encoder.js");
+      if (signal?.aborted) throw new Error("Animation export cancelled");
       blob = encodeApng(apngFrames, {fps,repeat:animationSettings.repeat});
     } else {
       blob = gif.finish();
     }
+    if (signal?.aborted) throw new Error("Animation export cancelled");
     const suffix = exportOptions.transparent ? "-transparent" : "";
     downloadBlob(blob, "planet-" + state.seed + suffix + "." + format);
     setStatus("Exported " + plan.frames + "-frame " + format.toUpperCase() +
@@ -132,7 +141,7 @@ async function exportAnimated(format, {
   }
 }
 
-export async function exportVideo({ state, canvas, draw, simulationSeconds, rotationPhase, spinSpeed, downloadBlob, setStatus, sleep, clampInt }) {
+export async function exportVideo({ state, canvas, draw, simulationSeconds, rotationPhase, spinSpeed, downloadBlob, setStatus, sleep, clampInt, signal }) {
   if (!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) {
     setStatus("Video export is not supported in this browser");
     return;
@@ -182,6 +191,7 @@ export async function exportVideo({ state, canvas, draw, simulationSeconds, rota
 
     recorder.start();
     for (let i = 0; i < totalFrames; i++) {
+      if (signal?.aborted) throw new Error("Video export cancelled");
       const offset = i / fps;
       draw(baseTime + offset, baseTurn + offset * speed);
       ctx.drawImage(canvas, 0, 0, size, size);
@@ -192,13 +202,15 @@ export async function exportVideo({ state, canvas, draw, simulationSeconds, rota
       await sleep(1000 / fps);
     }
 
+    if (signal?.aborted) throw new Error("Video export cancelled");
     recorder.stop();
     await done;
+    if (signal?.aborted) throw new Error("Video export cancelled");
     if (!chunks.length) throw new Error("Recorder produced no video");
     downloadBlob(new Blob(chunks, { type: mimeType || "video/webm" }), `planet-${state.seed}.webm`);
     setStatus(`Exported ${seconds}s WebM at ${fps} fps`);
   } catch (error) {
-    setStatus(`Video export failed: ${error?.message || "unknown error"}`);
+    setStatus(signal?.aborted ? "Video export cancelled" : `Video export failed: ${error?.message || "unknown error"}`);
   } finally {
     if (recorder?.state === "recording") recorder.stop();
     stream?.getTracks().forEach((track) => track.stop());
@@ -231,7 +243,7 @@ export async function generateBatch({
       ringOpacity: 0.72,
       ringGaps: round(0.2 + (i % 5) * 0.16),
       ringDetail: round(0.35 + (i % 4) * 0.18),
-      moons: i % 9,
+      moons: 0,
       moonSpread: round(0.25 + (i % 5) * 0.15),
       moonTilt: round(0.18 + (i % 6) * 0.12),
       moonSpeed: round(0.2 + (i % 5) * 0.14),

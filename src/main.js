@@ -2,6 +2,7 @@ import "./styles.css";
 import { palettes, presets, state, defaultPlanetState } from "./config.js";
 import { decodePlanetCode, encodePlanetCode, normalizePlanetState } from "./planet-state.js";
 import { renderApp, syncUi, syncEditorUi, syncTimelineUi, syncExportUi, syncAnimationUi } from "./ui.js";
+import { createFramePlan } from "./animation-frames.js";
 import { createAnimationStore, normalizeAnimationSettings, animationSummary } from "./animation-settings.js";
 import { chooseExportPreset, updateExportOption, createExportOptionStore } from "./export-options.js";
 import { createHistory, createSessionStore, normalizePreferences, nextPresetState } from "./editor-state.js";
@@ -788,7 +789,8 @@ let exportOptions = exportOptionStore.load();
 const animationStore = createAnimationStore(() => window.localStorage);
 let animationSettings = animationStore.load();
 let animationPreviewLoop = null;
-let activeAnimatedController = null;
+let previewRequest = 0;
+let activeExportController = null;
 let editHistory;
 let simulationSeconds = 0;
 let batchController = null;
@@ -808,7 +810,7 @@ if (!gl) {
   gl.useProgram(program);
   bindUi();
   syncExportUi(exportOptions);
-  syncAnimationUi(animationSettings);
+  syncAnimationUi(animationSettings, { busy: Boolean(activeExportController) });
   // A shared link takes precedence over the most recently saved local world.
   if (!new URLSearchParams(window.location.hash.slice(1)).has("planet")) {
     const saved = session.loadPlanetCode();
@@ -914,13 +916,14 @@ function collectUniforms(shaderProgram) {
     "uExportRings",
     "uExportGlow",
     "uExportStars",
+    "uExportLoop",
   ];
   return Object.fromEntries(names.map((name) => [name, gl.getUniformLocation(shaderProgram, name)]));
 }
 
 function requestFrame() {
   // Don't schedule an idle frame loop when the preview is offscreen or paused.
-  if (framePending || !gl || document.hidden || !previewVisible || recordingVideo) return;
+  if (framePending || !gl || document.hidden || !previewVisible || recordingVideo || isPreviewOpen()) return;
   framePending = true;
   requestAnimationFrame(tick);
 }
@@ -932,7 +935,7 @@ function invalidate() {
 
 function tick(time) {
   framePending = false;
-  if (document.hidden || !previewVisible || recordingVideo) return;
+  if (document.hidden || !previewVisible || recordingVideo || isPreviewOpen()) return;
 
   // Avoid driving high-cost procedural shaders at 60–144 FPS.
   if (state.animate && !dirty && time - lastRenderedMs < 1000 / editorPrefs.previewFps) {
@@ -942,8 +945,8 @@ function tick(time) {
 
   const nowSeconds = time * 0.001;
   if (!lastTickSeconds) lastTickSeconds = nowSeconds;
-  const delta = Math.max(0, Math.min(nowSeconds - lastTickSeconds, 0.1));
-  lastTickSeconds = nowSeconds;
+  const delta = Math.max(0, nowSeconds - lastTickSeconds);
+  lastTickSeconds = state.animate ? nowSeconds : 0;
   if (state.animate) {
     simulationSeconds += delta;
     rotationPhase += delta * spinSpeed();
@@ -965,50 +968,51 @@ function tick(time) {
   if (state.animate) requestFrame();
 }
 
-function draw(timeSeconds = simulationSeconds, turn = rotationPhase, target = null) {
-  if (!target) resizeCanvas();
+function draw(timeSeconds = simulationSeconds, turn = rotationPhase, target = null, planet = state) {
+  if (!target) resizeCanvas(planet);
   gl.bindFramebuffer(gl.FRAMEBUFFER, target?.framebuffer ?? null);
   const size = target?.size ?? canvas.width;
   gl.viewport(0, 0, size, size);
   gl.useProgram(program);
 
-  const palette = paletteVectors[state.palette] || paletteVectors.aurora;
+  const palette = paletteVectors[planet.palette] || paletteVectors.aurora;
   gl.uniform2f(uniforms.uResolution, size, size);
   gl.uniform1f(uniforms.uTime, timeSeconds);
   gl.uniform1f(uniforms.uTurn, turn);
-  gl.uniform1f(uniforms.uSeed, Number(state.seed) || 1);
-  gl.uniform1i(uniforms.uBody, Number(state.body));
-  gl.uniform1i(uniforms.uMoons, Number(state.moons));
-  gl.uniform4fv(uniforms["uMoonData[0]"], moonOrbitVectors(state, timeSeconds));
+  gl.uniform1f(uniforms.uSeed, Number(planet.seed) || 1);
+  gl.uniform1i(uniforms.uBody, Number(planet.body));
+  gl.uniform1i(uniforms.uMoons, Number(planet.moons));
+  if (Number(planet.moons) > 0 && target?.options?.moons !== false)
+    gl.uniform4fv(uniforms["uMoonData[0]"], moonOrbitVectors(planet, timeSeconds));
   gl.uniform3fv(uniforms["uPalette[0]"], palette);
-  gl.uniform1f(uniforms.uZoom, Number(state.zoom));
-  gl.uniform1f(uniforms.uLightX, Number(state.lightX));
-  gl.uniform1f(uniforms.uLightY, Number(state.lightY));
-  gl.uniform1f(uniforms.uWater, Number(state.water));
-  gl.uniform1f(uniforms.uTerrain, Number(state.terrain));
-  gl.uniform1f(uniforms.uRoughness, Number(state.roughness));
-  gl.uniform1f(uniforms.uClouds, Number(state.clouds));
-  gl.uniform1f(uniforms.uCloudSpeed, Number(state.cloudSpeed));
-  gl.uniform1f(uniforms.uAtmosphere, Number(state.atmosphere));
-  gl.uniform1f(uniforms.uStars, Number(state.stars));
-  gl.uniform1f(uniforms.uCity, Number(state.city));
-  gl.uniform1f(uniforms.uStorm, Number(state.storm));
-  gl.uniform1f(uniforms.uIce, Number(state.ice));
-  gl.uniform1f(uniforms.uLava, Number(state.lava));
-  gl.uniform1f(uniforms.uRings, state.rings ? 1 : 0);
-  gl.uniform1f(uniforms.uRingRadius, Number(state.ringRadius));
-  gl.uniform1f(uniforms.uRingTilt, Number(state.ringTilt));
-  gl.uniform1f(uniforms.uRingAngle, Number(state.ringAngle));
-  gl.uniform1f(uniforms.uRingWidth, Number(state.ringWidth));
-  gl.uniform1f(uniforms.uRingOpacity, Number(state.ringOpacity));
-  gl.uniform1f(uniforms.uRingGaps, Number(state.ringGaps));
-  gl.uniform1f(uniforms.uRingDetail, Number(state.ringDetail));
-  gl.uniform1f(uniforms.uShade, Number(state.shade));
-  gl.uniform1f(uniforms.uDither, Number(state.dither));
-  gl.uniform1f(uniforms.uMoonSpread, Number(state.moonSpread));
-  gl.uniform1f(uniforms.uMoonTilt, Number(state.moonTilt));
-  gl.uniform1f(uniforms.uMoonSpeed, Number(state.moonSpeed));
-  gl.uniform1f(uniforms.uMoonSize, Number(state.moonSize));
+  gl.uniform1f(uniforms.uZoom, Number(planet.zoom));
+  gl.uniform1f(uniforms.uLightX, Number(planet.lightX));
+  gl.uniform1f(uniforms.uLightY, Number(planet.lightY));
+  gl.uniform1f(uniforms.uWater, Number(planet.water));
+  gl.uniform1f(uniforms.uTerrain, Number(planet.terrain));
+  gl.uniform1f(uniforms.uRoughness, Number(planet.roughness));
+  gl.uniform1f(uniforms.uClouds, Number(planet.clouds));
+  gl.uniform1f(uniforms.uCloudSpeed, Number(planet.cloudSpeed));
+  gl.uniform1f(uniforms.uAtmosphere, Number(planet.atmosphere));
+  gl.uniform1f(uniforms.uStars, Number(planet.stars));
+  gl.uniform1f(uniforms.uCity, Number(planet.city));
+  gl.uniform1f(uniforms.uStorm, Number(planet.storm));
+  gl.uniform1f(uniforms.uIce, Number(planet.ice));
+  gl.uniform1f(uniforms.uLava, Number(planet.lava));
+  gl.uniform1f(uniforms.uRings, planet.rings ? 1 : 0);
+  gl.uniform1f(uniforms.uRingRadius, Number(planet.ringRadius));
+  gl.uniform1f(uniforms.uRingTilt, Number(planet.ringTilt));
+  gl.uniform1f(uniforms.uRingAngle, Number(planet.ringAngle));
+  gl.uniform1f(uniforms.uRingWidth, Number(planet.ringWidth));
+  gl.uniform1f(uniforms.uRingOpacity, Number(planet.ringOpacity));
+  gl.uniform1f(uniforms.uRingGaps, Number(planet.ringGaps));
+  gl.uniform1f(uniforms.uRingDetail, Number(planet.ringDetail));
+  gl.uniform1f(uniforms.uShade, Number(planet.shade));
+  gl.uniform1f(uniforms.uDither, Number(planet.dither));
+  gl.uniform1f(uniforms.uMoonSpread, Number(planet.moonSpread));
+  gl.uniform1f(uniforms.uMoonTilt, Number(planet.moonTilt));
+  gl.uniform1f(uniforms.uMoonSpeed, Number(planet.moonSpeed));
+  gl.uniform1f(uniforms.uMoonSize, Number(planet.moonSize));
   const layers = target?.options;
   gl.uniform1f(uniforms.uExportTransparent, layers?.transparent ? 1 : 0);
   gl.uniform1f(uniforms.uExportMoons, layers?.moons === false ? 0 : 1);
@@ -1019,8 +1023,8 @@ function draw(timeSeconds = simulationSeconds, turn = rotationPhase, target = nu
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
-function resizeCanvas() {
-  const size = renderSize();
+function resizeCanvas(planet = state) {
+  const size = renderSize(planet);
   if (canvas.width !== size || canvas.height !== size) {
     canvas.width = size;
     canvas.height = size;
@@ -1039,6 +1043,7 @@ function bindUi() {
         return;
       }
       state[input.dataset.key] = readInput(input);
+      if (input.dataset.key === "animate") lastTickSeconds = 0;
       normalizeState();
       syncUi(state);
       invalidate();
@@ -1071,7 +1076,7 @@ function bindUi() {
       const value = input.type === "checkbox" ? input.checked : Number(input.value);
       animationSettings = normalizeAnimationSettings({ ...animationSettings, [name]: value });
       animationStore.save(animationSettings);
-      syncAnimationUi(animationSettings);
+      syncAnimationUi(animationSettings, { busy: Boolean(activeExportController) });
     });
   });
 
@@ -1120,6 +1125,10 @@ function bindUi() {
     button.addEventListener("click", () => actions[button.dataset.action]());
   });
 
+  document.querySelectorAll("[data-section-link], .preview-link, .section-preview-link").forEach((link) => {
+    link.addEventListener("click", navigateEditorLink);
+  });
+
   document.querySelectorAll("[data-preset]").forEach((button) => {
     button.addEventListener("click", () => {
       applyPreset(button.dataset.preset);
@@ -1131,8 +1140,9 @@ function bindUi() {
     "click", () => exportDialog.close(),
   );
   exportDialog.addEventListener("close", () => {
-    animationPreviewLoop?.stop();
-    animationPreviewLoop = null;
+    stopAnimationPreview();
+    lastTickSeconds = 0;
+    invalidate();
   });
   document.querySelector("[data-animation-preview-toggle]").addEventListener("click", () => {
     animationPreviewLoop?.toggle();
@@ -1151,10 +1161,16 @@ function bindUi() {
     choosePreset: applyPreset,
     toggleHelp: toggleShortcuts,
     isHelpOpen: () => shortcutDialog.open,
+    isModalOpen: () => exportDialog.open || shortcutDialog.open,
+  });
+
+  document.querySelector("[data-light-edit]").addEventListener("change", (event) => {
+    canvas.dataset.lightEditing = String(event.target.checked);
   });
 
   let draggingLight = false;
   canvas.addEventListener("pointerdown", (event) => {
+    if (!document.querySelector("[data-light-edit]").checked) return;
     draggingLight = true;
     canvas.setPointerCapture(event.pointerId);
     setLightFromPointer(event);
@@ -1168,6 +1184,16 @@ function bindUi() {
       draggingLight = false;
     });
   }
+}
+
+function navigateEditorLink(event) {
+  const destination = document.querySelector(event.currentTarget.getAttribute("href"));
+  if (!destination) return;
+  // The URL fragment belongs to the shared planet, not editor navigation.
+  event.preventDefault();
+  if (destination.tagName === "DETAILS") destination.open = true;
+  destination.querySelector("summary, h1")?.focus({ preventScroll: true });
+  destination.scrollIntoView({ block: "start" });
 }
 
 function readInput(input) {
@@ -1202,6 +1228,7 @@ function restoreHistory(direction) {
   if (!next) return;
   batchController?.abort();
   Object.assign(state, next);
+  lastTickSeconds = 0;
   normalizeState();
   syncUi(state);
   syncEditorUi(editorPrefs, editHistory);
@@ -1211,7 +1238,7 @@ function restoreHistory(direction) {
 }
 
 function seekSimulation(seconds) {
-  const next = Math.max(0, Math.min(60, seconds));
+  const next = Math.max(0, seconds);
   rotationPhase += (next - simulationSeconds) * spinSpeed();
   simulationSeconds = next;
   state.animate = false;
@@ -1249,24 +1276,29 @@ const actions = {
     mutate();
   },
   async previewExport() {
+    stopAnimationPreview();
+    const request = previewRequest;
+    const snapshot = captureExport();
     let renderer;
     try {
-      animationPreviewLoop?.stop();
-      animationPreviewLoop = null;
-      const { createExportRenderer } = await import("./export-renderer.js");
-      renderer = createExportRenderer(gl, draw, renderSize());
-      const frame = renderer.render(simulationSeconds, rotationPhase, exportOptions);
+      renderer = await snapshot.createFrameRenderer();
+      if (request !== previewRequest) return;
+      const frame = renderer.render(snapshot.simulationSeconds, snapshot.rotationPhase, snapshot.exportOptions);
       const preview = document.querySelector("#export-preview-canvas");
+      preview.width = preview.height = snapshot.state.size;
       const ctx = preview.getContext("2d");
       if (!ctx) throw new Error("Preview canvas unavailable");
       ctx.clearRect(0, 0, preview.width, preview.height);
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(frame, 0, 0, preview.width, preview.height);
-      document.querySelector("#export-preview-title").textContent = "Export preview";
+      ctx.drawImage(exportCanvas(frame, snapshot.state.size), 0, 0);
+      document.querySelector("#export-preview-title").textContent = "PNG preview";
+      document.querySelector("[data-preview-description]").textContent =
+        `${snapshot.state.size} × ${snapshot.state.size} px · ${snapshot.exportOptions.transparent ? "Transparent" : "Full background"}`;
       document.querySelector("[data-export-preview-playback]").hidden = true;
       document.querySelector("#export-preview-dialog").showModal();
     } catch (error) {
-      setStatus(`Export preview failed: ${error?.message || "unknown error"}`);
+      if (request === previewRequest)
+        setStatus(`Export preview failed: ${error?.message || "unknown error"}`);
     } finally {
       renderer?.dispose();
       invalidate();
@@ -1277,55 +1309,59 @@ const actions = {
       setStatus("Reduce length or FPS to 120 frames or fewer");
       return;
     }
+    stopAnimationPreview();
+    const request = previewRequest;
+    const snapshot = captureExport();
     let renderer;
     try {
-      const [{ createExportRenderer }, { createFramePlan },
-        { startAnimationPreview }] = await Promise.all([
-          import("./export-renderer.js"),
-          import("./animation-frames.js"),
-          import("./animation-preview.js"),
-        ]);
-      renderer = createExportRenderer(gl, draw, renderSize());
+      const { startAnimationPreview } = await import("./animation-preview.js");
+      if (request !== previewRequest) return;
+      renderer = await snapshot.createFrameRenderer();
+      if (request !== previewRequest) return;
       const plan = createFramePlan({
-        seconds: animationSettings.seconds,
-        fps: animationSettings.fps,
-        seamless: animationSettings.seamless,
-        baseTime: simulationSeconds,
-        baseTurn: rotationPhase,
-        spinSpeed: spinSpeed(),
+        ...snapshot.animationSettings,
+        baseTime: snapshot.simulationSeconds,
+        baseTurn: snapshot.rotationPhase,
+        spinSpeed: snapshot.spinSpeed(),
       });
       const dialog = document.querySelector("#export-preview-dialog");
-      document.querySelector("#export-preview-title").textContent = "Animated export preview";
+      document.querySelector("#export-preview-title").textContent = "Animation preview";
+      document.querySelector("[data-preview-description]").textContent =
+        `${snapshot.state.size} × ${snapshot.state.size} px · ${plan.frames} frames · ${plan.fps} FPS`;
+      const previewCanvas = document.querySelector("#export-preview-canvas");
+      previewCanvas.width = previewCanvas.height = snapshot.state.size;
       const playback = document.querySelector("[data-export-preview-playback]");
       playback.hidden = false;
       dialog.showModal();
       animationPreviewLoop = startAnimationPreview({
-        renderer, plan, options: { ...exportOptions },
+        renderer, plan, options: snapshot.exportOptions,
         canvas: document.querySelector("#export-preview-canvas"),
         label: document.querySelector("[data-preview-frame]"),
-        repeat: animationSettings.repeat,
+        repeat: snapshot.animationSettings.repeat,
         onPlaybackChange: (playing) => {
           document.querySelector("[data-animation-preview-toggle]").textContent = playing ? "Pause" : "Play";
         },
       });
       renderer = null; // preview loop owns the framebuffer lifecycle
     } catch (error) {
-      document.querySelector("#export-preview-dialog").close();
-      setStatus(`Animation preview failed: ${error?.message || "unknown error"}`);
+      if (request === previewRequest) {
+        document.querySelector("#export-preview-dialog").close();
+        setStatus(`Animation preview failed: ${error?.message || "unknown error"}`);
+      }
     } finally {
       renderer?.dispose();
       invalidate();
     }
   },
   async exportPng() {
+    const snapshot = captureExport();
     let renderer;
     try {
-      const { createExportRenderer } = await import("./export-renderer.js");
-      renderer = createExportRenderer(gl, draw, renderSize());
-      const frame = renderer.render(simulationSeconds, rotationPhase, exportOptions);
-      const suffix = exportOptions.transparent ? "-transparent" : "";
-      await downloadCanvas(exportCanvas(frame), `planet-${state.seed}${suffix}.png`);
-      setStatus(`Exported ${exportOptions.transparent ? "transparent" : "opaque"} PNG ${state.size}×${state.size}`);
+      renderer = await snapshot.createFrameRenderer();
+      const frame = renderer.render(snapshot.simulationSeconds, snapshot.rotationPhase, snapshot.exportOptions);
+      const suffix = snapshot.exportOptions.transparent ? "-transparent" : "";
+      await downloadCanvas(exportCanvas(frame, snapshot.state.size), `planet-${snapshot.state.seed}${suffix}.png`);
+      setStatus(`Exported ${snapshot.exportOptions.transparent ? "transparent" : "opaque"} PNG ${snapshot.state.size}×${snapshot.state.size}`);
     } catch (error) {
       setStatus(`PNG export failed: ${error?.message || "unknown error"}`);
     } finally {
@@ -1342,9 +1378,9 @@ const actions = {
   exportApng() { runExtra("exportApng"); },
   exportGif() { runExtra("exportGif"); },
   cancelAnimatedExport() {
-    if (activeAnimatedController) {
-      activeAnimatedController.abort();
-      setStatus("Animation export cancelled");
+    if (activeExportController) {
+      activeExportController.abort();
+      setStatus("Export cancelled");
     }
   },
   copyCode() {
@@ -1377,6 +1413,7 @@ const actions = {
 
 function applyPlanetCode(code) {
   Object.assign(state, decodePlanetCode(code));
+  lastTickSeconds = 0;
   normalizeState();
   syncUi(state);
   invalidate();
@@ -1434,7 +1471,7 @@ function randomize() {
   state.ringOpacity = round(0.42 + rng() * 0.58);
   state.ringGaps = round(rng());
   state.ringDetail = round(0.25 + rng() * 0.75);
-  state.moons = Math.floor(rng() * 9);
+  state.moons = 0;
   state.moonSpread = round(rng());
   state.moonTilt = round(rng());
   state.moonSpeed = round(0.12 + rng() * 0.78);
@@ -1463,7 +1500,7 @@ function mutate() {
 
 // Optional tools form a separate chunk and are fetched only on first use.
 async function runExtra(action) {
-  if (recordingVideo || activeAnimatedController || !gl) return;
+  if (recordingVideo || activeExportController || !gl) return;
   const isVideo = action === "exportVideo";
   const isAnimated = action === "exportApng" || action === "exportGif";
   const isBatch = action === "generateBatch";
@@ -1473,28 +1510,27 @@ async function runExtra(action) {
   }
   if (isVideo) recordingVideo = true;
   if (isBatch) batchController?.abort();
-  const controller = isBatch || isAnimated ? new AbortController() : null;
+  const controller = new AbortController();
   if (isBatch) batchController = controller;
-  if (isAnimated) {
-    activeAnimatedController = controller;
-    document.querySelector('[data-action="cancelAnimatedExport"]').hidden = false;
+  if (!isBatch) {
+    activeExportController = controller;
+    setExportBusy(true);
+    setStatus(isVideo ? "Preparing video export…" : isAnimated ? "Preparing animation export…" : "Preparing spritesheet export…");
   }
 
+  const snapshot = captureExport();
   try {
     const extra = await import("./extra-actions.js");
     if (controller?.signal.aborted) return;
     await extra[action]({
-      state, palettes, canvas, draw, batchStrip,
-      simulationSeconds, rotationPhase, spinSpeed, downloadCanvas, downloadBlob,
+      ...snapshot,
+      // Batch generation deliberately edits the live state temporarily; exports
+      // use the world captured before their first lazy import or yielded frame.
+      ...(isBatch ? { state, draw } : {}),
+      palettes, canvas, batchStrip, downloadCanvas, downloadBlob,
       syncUi, normalizeState, resizeCanvas, invalidate, recordEdit,
       setStatus, clampInt, round, sleep,
       signal: controller?.signal,
-      exportOptions: { ...exportOptions },
-      animationSettings: { ...animationSettings },
-      createFrameRenderer: async () => {
-        const { createExportRenderer } = await import("./export-renderer.js");
-        return createExportRenderer(gl, draw, renderSize());
-      },
       yieldControl: () => new Promise((resolve) => setTimeout(resolve, 0)),
     });
   } catch (error) {
@@ -1502,30 +1538,67 @@ async function runExtra(action) {
       isAnimated ? "Animation export" : "Video export";
     if (!controller?.signal.aborted) setStatus(`${label} failed: ${error?.message || "unknown error"}`);
   } finally {
-    if (isVideo) recordingVideo = false;
+    if (isVideo) {
+      recordingVideo = false;
+      lastTickSeconds = 0;
+    }
     if (isBatch && batchController === controller) batchController = null;
-    if (isAnimated && activeAnimatedController === controller) {
-      activeAnimatedController = null;
-      document.querySelector('[data-action="cancelAnimatedExport"]').hidden = true;
+    if (!isBatch && activeExportController === controller) {
+      activeExportController = null;
+      setExportBusy(false);
     }
     invalidate();
   }
+}
+
+function setExportBusy(busy) {
+  document.querySelectorAll("[data-export-start]").forEach((button) => { button.disabled = busy; });
+  document.querySelector('[data-action="cancelAnimatedExport"]').hidden = !busy;
+  syncAnimationUi(animationSettings, { busy });
+}
+
+function isPreviewOpen() {
+  return document.querySelector("#export-preview-dialog").open;
+}
+
+function stopAnimationPreview() {
+  previewRequest += 1;
+  animationPreviewLoop?.stop();
+  animationPreviewLoop = null;
+}
+
+function captureExport() {
+  const planet = { ...state };
+  const drawSnapshot = (time, turn, target) => draw(time, turn, target, planet);
+  return {
+    state: planet,
+    simulationSeconds,
+    rotationPhase,
+    spinSpeed: () => spinSpeed(planet),
+    draw: drawSnapshot,
+    exportOptions: { ...exportOptions },
+    animationSettings: { ...animationSettings },
+    createFrameRenderer: async () => {
+      const { createExportRenderer } = await import("./export-renderer.js");
+      return createExportRenderer(gl, drawSnapshot, renderSize(planet));
+    },
+  };
 }
 
 function normalizeState() {
   Object.assign(state, normalizePlanetState(state));
 }
 
-function renderSize() {
-  return clampInt(state.pixelSize, 32, 512);
+function renderSize(planet = state) {
+  return clampInt(planet.pixelSize, 32, 512);
 }
 
-function spinSpeed() {
-  return 0.18 + Number(state.spin) * 1.35;
+function spinSpeed(planet = state) {
+  return 0.18 + Number(planet.spin) * 1.35;
 }
 
-function exportCanvas(source = canvas) {
-  const size = clampInt(state.size, 64, 512);
+function exportCanvas(source = canvas, outputSize = state.size) {
+  const size = clampInt(outputSize, 64, 512);
   if (source.width === size && source.height === size) return source;
   const output = document.createElement("canvas");
   output.width = size;
@@ -1558,9 +1631,17 @@ async function copyText(value, successMessage) {
   }
 }
 
-function downloadCanvas(sourceCanvas, filename) {
+function downloadCanvas(sourceCanvas, filename, { signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Export cancelled"));
+      return;
+    }
     sourceCanvas.toBlob((blob) => {
+      if (signal?.aborted) {
+        reject(new Error("Export cancelled"));
+        return;
+      }
       if (!blob) {
         reject(new Error("Could not encode PNG"));
         return;
@@ -1604,6 +1685,9 @@ function updateFps(time) {
 
 function setStatus(message) {
   statusEl.textContent = message;
+  if (/export|encoding|recording/i.test(message)) {
+    document.querySelector("[data-export-feedback]").textContent = message;
+  }
 }
 
 function mulberry32(seed) {

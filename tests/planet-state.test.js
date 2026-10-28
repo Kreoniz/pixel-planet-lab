@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { state } from "../src/config.js";
+import { state, presets } from "../src/config.js";
 import { decodePlanetCode, encodePlanetCode, normalizePlanetState } from "../src/planet-state.js";
 
 test("round-trips existing codes and URL-safe share codes", () => {
@@ -86,4 +86,13 @@ test("percentage controls retain normalized values through planet codes", () => 
     ])),
     Object.fromEntries(["water", "clouds", "city", "ringOpacity", "stars", "lava"].map((key) => [key, world[key]])),
   );
+});
+
+
+test("moons are opt-in for new worlds and every preset; explicit codes retain them", () => {
+  assert.equal(state.moons, 0);
+  for (const preset of Object.values(presets)) assert.equal(preset.moons, 0);
+  const chosen = decodePlanetCode(encodePlanetCode({ ...state, moons: 4 }));
+  assert.equal(chosen.moons, 4);
+  assert.equal(normalizePlanetState({}).moons, 0);
 });

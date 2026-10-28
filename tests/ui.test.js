@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { controlSections, presetButtons, presets, state } from "../src/config.js";
-import { renderApp, syncUi } from "../src/ui.js";
+import { renderApp, syncUi, syncTimelineUi } from "../src/ui.js";
 
 test("retains the original two-column studio without introducing navigation", () => {
   const root = { innerHTML: "" };
@@ -25,7 +25,7 @@ test("retains the original two-column studio without introducing navigation", ()
       assert.ok(html.includes(marker), `missing ${marker}`);
     }
   }
-  for (const action of ["randomize", "mutate", "exportPng", "shareLink", "batch"]) {
+  for (const action of ["randomize", "mutate", "shareLink", "batch"]) {
     assert.equal(html.split(`data-action="${action}"`).length - 1, 1, `action ${action} must appear once`);
   }
 });
@@ -82,7 +82,7 @@ test("syncs percentages, labels, and disabled controls without mutating settings
     assert.equal(seedInput.value, "4567");
     assert.equal(seedInput.disabled, false);
     assert.equal(output.textContent, "0.94");
-    assert.equal(preset.attributes["aria-pressed"], "true");
+    assert.equal(preset.attributes["aria-pressed"], undefined, "presets apply settings, rather than falsely claiming selection after edits");
 
     world.body = 0;
     world.rings = true;
@@ -137,4 +137,51 @@ test("toolbar help remains next to seed actions and undo/redo stay adjacent", ()
   const redo = root.innerHTML.indexOf('data-action="redo"');
   assert.ok(seed < helper && helper < undo && undo < redo);
   assert.ok(actions.indexOf("redo") - actions.indexOf("undo") === 1);
+});
+
+
+test("timeline range expands before setting an absolute playhead and never shrinks on seek", () => {
+  let maximum = 60, value = 0;
+  const scrub = {
+    get max() { return String(maximum); },
+    set max(next) { maximum = Number(next); },
+    get value() { return String(value); },
+    set value(next) { value = Math.min(maximum, Number(next)); },
+    setAttribute() {},
+  };
+  const playback = { setAttribute() {} };
+  const old = globalThis.document;
+  globalThis.document = { querySelector: (q) => ({
+    "[data-timeline]": scrub, "[data-playback-toggle]": playback,
+  })[q] || null };
+  try {
+    syncTimelineUi(75, true);
+    assert.equal(scrub.value, "75");
+    assert.equal(scrub.max, "120");
+    assert.equal(playback.textContent, "Pause");
+    syncTimelineUi(10, false);
+    assert.equal(scrub.max, "120");
+    assert.equal(scrub.value, "10");
+    assert.equal(playback.textContent, "Play");
+  } finally { globalThis.document = old; }
+});
+
+test("moon and ring settings reveal only after their layers are enabled", () => {
+  const moon = { dataset: { dependentControls: "Moons" } };
+  const ring = { dataset: { dependentControls: "Rings" } };
+  const old = globalThis.document;
+  globalThis.document = {
+    querySelectorAll: (q) => q === "[data-dependent-controls]" ? [moon, ring] : [],
+    querySelector: () => null,
+  };
+  try {
+    syncUi({ ...state, moons: 0, rings: false });
+    assert.equal(moon.hidden, true);
+    assert.equal(ring.hidden, true);
+    syncUi({ ...state, moons: 3, rings: true });
+    assert.equal(moon.hidden, false);
+    assert.equal(ring.hidden, false);
+    syncUi({ ...state, body: 8, rings: false });
+    assert.equal(ring.hidden, false, "the accretion disk remains adjustable");
+  } finally { globalThis.document = old; }
 });

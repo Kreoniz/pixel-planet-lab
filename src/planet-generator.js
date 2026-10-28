@@ -28,7 +28,7 @@ export function seededRandom(seed) {
 
 export function resetPlanet(current) {
   const preset = families.find(({ body }) => body === Number(current.body)) || presets.terrestrial;
-  return normalizePlanetState(nextPresetState(current, defaultPlanetState, preset, current.seed));
+  return normalizePlanetState(fitRings(nextPresetState(current, defaultPlanetState, preset, current.seed)));
 }
 
 // Start from an authored family, then vary its defining features together.
@@ -54,5 +54,18 @@ export function generatePlanet(current, { seed = current.seed, lockType = false,
     planet[key] = round(Math.max(0, Math.min(1,
       Number(planet[key]) + (rng() * 2 - 1) * amount * (similar ? 0.45 : 1))));
   }
-  return normalizePlanetState(planet);
+  return normalizePlanetState(similar ? planet : fitRings(planet));
+}
+
+function fitRings(planet) {
+  if (planet.rings) {
+    // Project the shader's outer ring ellipse onto each screen axis.
+    const outer = 0.68 * (1.14 + 0.48 * planet.ringRadius + 0.9 * planet.ringWidth);
+    const tilt = 0.12 + 0.76 * planet.ringTilt;
+    const angle = (planet.ringAngle - 0.5) * Math.PI;
+    const c = Math.cos(angle), s = Math.sin(angle);
+    const extent = outer * Math.max(Math.hypot(c, tilt * s), Math.hypot(s, tilt * c));
+    planet.zoom = Math.min(planet.zoom, Math.floor(0.94 / extent * 100) / 100);
+  }
+  return planet;
 }

@@ -1,11 +1,11 @@
 import "./styles.css";
-import { palettes, presets, state, defaultPlanetState } from "./config.js";
+import { palettes, presets, state } from "./config.js";
 import { decodePlanetCode, encodePlanetCode, normalizePlanetState } from "./planet-state.js";
 import { renderApp, syncUi, syncEditorUi, syncTimelineUi, syncExportUi, syncAnimationUi } from "./ui.js";
 import { createFramePlan } from "./animation-frames.js";
 import { createAnimationStore, normalizeAnimationSettings, animationSummary } from "./animation-settings.js";
 import { chooseExportPreset, updateExportOption, createExportOptionStore } from "./export-options.js";
-import { createHistory, createSessionStore, normalizePreferences, nextPresetState } from "./editor-state.js";
+import { createHistory, createSessionStore, normalizePreferences } from "./editor-state.js";
 import { registerEditorHotkeys } from "./hotkeys.js";
 import { generatePlanet, resetPlanet } from "./planet-generator.js";
 import { moonOrbitVectors } from "./moon-orbits.js";
@@ -14,6 +14,8 @@ import { installMissingChunkRecovery } from "./missing-chunk-recovery.js";
 renderApp(document.querySelector("#app"));
 
 const canvas = document.querySelector("#planetCanvas");
+const miniCanvas = document.querySelector("#miniPlanetCanvas");
+const miniContext = miniCanvas.getContext("2d");
 const gl = canvas.getContext("webgl2", {
   antialias: false,
   alpha: false,
@@ -781,6 +783,8 @@ let fpsFrames = 0;
 let fpsTime = 0;
 let recordingVideo = false;
 let previewVisible = true;
+let fullPreviewVisible = true;
+let miniPreviewVisible = !("IntersectionObserver" in window);
 let framePending = false;
 let lastRenderedMs = -Infinity;
 const session = createSessionStore(() => window.localStorage);
@@ -837,11 +841,17 @@ if (!gl) {
     if (!document.hidden) requestFrame();
   });
   if ("IntersectionObserver" in window) {
-    new IntersectionObserver(([entry]) => {
-      previewVisible = entry.isIntersecting;
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.target === canvas) fullPreviewVisible = entry.isIntersecting;
+        else miniPreviewVisible = entry.isIntersecting;
+      }
+      previewVisible = fullPreviewVisible || miniPreviewVisible;
       lastTickSeconds = 0;
-      if (previewVisible) requestFrame();
-    }).observe(canvas);
+      if (previewVisible) invalidate();
+    });
+    observer.observe(canvas);
+    observer.observe(miniCanvas);
   }
 }
 
@@ -956,6 +966,10 @@ function tick(time) {
   if (state.animate || dirty) {
     // All shader effects use the same simulation clock. Paused worlds cannot jump.
     draw(simulationSeconds);
+    if (miniContext && miniPreviewVisible) {
+      miniContext.imageSmoothingEnabled = false;
+      miniContext.drawImage(canvas, 0, 0, miniCanvas.width, miniCanvas.height);
+    }
     dirty = false;
     lastRenderedMs = time;
     syncTimelineUi(simulationSeconds, state.animate);
@@ -1044,6 +1058,7 @@ function bindUi() {
         return;
       }
       state[input.dataset.key] = readInput(input);
+      if (input.dataset.key === "body") Object.assign(state, resetPlanet(state));
       if (input.dataset.key === "animate") lastTickSeconds = 0;
       normalizeState();
       syncUi(state);
@@ -1081,6 +1096,15 @@ function bindUi() {
     });
   });
 
+  document.querySelectorAll("[data-palette]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.palette = button.dataset.palette;
+      syncUi(state);
+      invalidate();
+      recordEdit();
+    });
+  });
+
   document.querySelectorAll("[data-grid-preset]").forEach((button) => {
     button.addEventListener("click", () => {
       state.pixelSize = Number(button.dataset.gridPreset);
@@ -1098,9 +1122,16 @@ function bindUi() {
     });
   });
 
+  document.querySelector("[data-unpin-preview]").addEventListener("click", () => {
+    editorPrefs.pinPreview = false;
+    session.savePreferences(editorPrefs);
+    syncEditorUi(editorPrefs, editHistory);
+    invalidate();
+  });
+
   document.querySelectorAll("[data-preference]").forEach((input) => {
     input.addEventListener(input.type === "range" ? "input" : "change", () => {
-      Object.assign(editorPrefs, normalizePreferences({ ...editorPrefs, [input.dataset.preference]: input.type === "range" ? Number(input.value) : input.value }));
+      Object.assign(editorPrefs, normalizePreferences({ ...editorPrefs, [input.dataset.preference]: input.type === "checkbox" ? input.checked : input.type === "range" ? Number(input.value) : input.value }));
       session.savePreferences(editorPrefs);
       syncEditorUi(editorPrefs, editHistory);
       fpsFrames = 0;
@@ -1447,7 +1478,7 @@ function applyPreset(name) {
   const preset = presets[name];
   if (!preset) return;
   const seed = Math.floor(Math.random() * 999999) + 1;
-  Object.assign(state, nextPresetState(state, defaultPlanetState, preset, seed));
+  Object.assign(state, resetPlanet({ ...state, body: preset.body, seed }));
   normalizeState();
   syncUi(state);
   invalidate();

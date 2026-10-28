@@ -194,7 +194,7 @@ export const controlSections = [
 ];
 
 const controlHelp = {
-  body: "Switches the base shader behavior: rocky worlds, gas bands, lava, star plasma, black hole disk, and so on.",
+  body: "Starts from this type’s authored settings. Keeps the seed, output and playback settings; Undo restores your previous edits.",
   palette: "Chooses the six-color palette used by terrain, atmosphere, rings, stars, and special effects.",
   seed: "Changes the procedural noise pattern for terrain, clouds, moons, rings, and stars.",
   size: "Final exported PNG size. It can be larger than the internal pixel grid.",

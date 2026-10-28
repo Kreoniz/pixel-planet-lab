@@ -26,11 +26,11 @@ test("editor preferences do not enter planet state and survive storage failures"
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => values.set(key, value),
   }));
-  assert.deepEqual(session.loadPreferences(), { previewFps: 30, lockType: false, lockPalette: false, variationMode: "similar" });
+  assert.deepEqual(session.loadPreferences(), { previewFps: 30, lockType: false, lockPalette: false, variationMode: "similar", pinPreview: true });
   assert.equal(session.savePlanetCode("planet-code"), true);
   assert.equal(session.loadPlanetCode(), "planet-code");
   assert.equal(session.savePreferences({ previewFps: 45, lockType: true, lockPalette: true }), true);
-  assert.deepEqual(session.loadPreferences(), { previewFps: 45, lockType: true, lockPalette: true, variationMode: "similar" });
+  assert.deepEqual(session.loadPreferences(), { previewFps: 45, lockType: true, lockPalette: true, variationMode: "similar", pinPreview: true });
   assert.equal(normalizePreferences({ previewFps: 999 }).previewFps, 30);
   assert.equal(createSessionStore(() => { throw Error("blocked"); }).loadPlanetCode(), null);
   assert.equal(createSessionStore(() => { throw Error("blocked"); }).savePlanetCode("x"), false);

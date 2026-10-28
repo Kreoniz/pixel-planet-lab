@@ -89,7 +89,7 @@ export function createStudio() {
     animationSettings: { seconds: 4, fps: 12, seamless: true, repeat: true },
     previewRequest: 0, animationPreviewLoop: null, editHistory: null,
     recordingVideo: false, activeExportController: null, batchController: null,
-    framePending: false, previewVisible: true, dirty: false,
+    framePending: false, previewVisible: true, dirty: false, miniContext: null, miniPreviewVisible: false,
     program: {}, gl, paletteVectors: palettes, palettes,
     canvas: node("#planetCanvas"), statusEl: node("#status"), batchStrip: {},
     document: { hidden: true, querySelector: node, querySelectorAll: () => [], createElement: () => node(Symbol()) },

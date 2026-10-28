@@ -5,6 +5,7 @@ export const editorDefaults = Object.freeze({
   lockType: false,
   lockPalette: false,
   variationMode: "similar",
+  pinPreview: true,
 });
 
 export const sessionKey = "pixel-planet-lab.session.v1";
@@ -19,6 +20,7 @@ export function normalizePreferences(input = {}) {
     lockType: obj.lockType === true,
     lockPalette: obj.lockPalette === true,
     variationMode: obj.variationMode === "explore" ? "explore" : "similar",
+    pinPreview: obj.pinPreview !== false,
   };
 }
 

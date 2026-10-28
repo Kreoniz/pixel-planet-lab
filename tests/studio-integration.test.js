@@ -242,3 +242,17 @@ test("cancellation while PNG encoding is pending prevents the final download", a
   await assert.rejects(encoding, /Export cancelled/);
   assert.equal(downloads.length, 0);
 });
+
+test("the compact editing preview reuses the live render and disables pixel smoothing", () => {
+  const studio = createStudio();
+  const copied = [];
+  studio.context.document.hidden = false;
+  studio.context.miniPreviewVisible = true;
+  studio.context.miniCanvas = { width: 96, height: 96 };
+  studio.context.miniContext = { drawImage(...args) { copied.push(args); } };
+  studio.context.dirty = true;
+  studio.api.tick(1000);
+  assert.equal(copied.length, 1);
+  assert.equal(copied[0][0], studio.context.canvas);
+  assert.equal(studio.context.miniContext.imageSmoothingEnabled, false);
+});

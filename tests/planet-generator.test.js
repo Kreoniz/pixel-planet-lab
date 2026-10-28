@@ -42,3 +42,25 @@ test("reset returns to the current family but keeps seed and export/playback set
   assert.equal(reset.moons, 0);
   assert.equal(current.moons, 6);
 });
+
+test("fresh generated rings fit the frame after variation; similar compositions keep their zoom", () => {
+  for (const preset of [presets.gas, presets.toxic, presets.blackhole]) {
+    for (let seed = 1; seed <= 100; seed++) {
+      const world = generatePlanet({ ...defaultPlanetState, ...preset }, { seed, lockType: true });
+      const outer = 0.68 * world.zoom * (1.14 + 0.48 * world.ringRadius + 0.9 * world.ringWidth);
+      const angle = (world.ringAngle - 0.5) * Math.PI;
+      const tilt = 0.12 + 0.76 * world.ringTilt;
+      const x = outer * Math.hypot(Math.cos(angle), tilt * Math.sin(angle));
+      const y = outer * Math.hypot(Math.sin(angle), tilt * Math.cos(angle));
+      assert.ok(Math.max(x, y) <= 0.940001, `body ${preset.body}, seed ${seed}`);
+    }
+  }
+  const reset = resetPlanet({ ...defaultPlanetState, ...presets.gas, zoom: 1.1 });
+  const resetOuter = 0.68 * reset.zoom * (1.14 + 0.48 * reset.ringRadius + 0.9 * reset.ringWidth);
+  const resetAngle = (reset.ringAngle - 0.5) * Math.PI;
+  const resetTilt = 0.12 + 0.76 * reset.ringTilt;
+  assert.ok(resetOuter * Math.max(Math.hypot(Math.cos(resetAngle), resetTilt * Math.sin(resetAngle)),
+    Math.hypot(Math.sin(resetAngle), resetTilt * Math.cos(resetAngle))) <= 0.94);
+  const custom = { ...defaultPlanetState, ...presets.gas, zoom: 1.1 };
+  assert.equal(generatePlanet(custom, { seed: 5, similar: true }).zoom, 1.1);
+});

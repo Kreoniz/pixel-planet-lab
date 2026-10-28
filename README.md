@@ -54,7 +54,7 @@ The interface retains the compact, dark two-column preview and control panel.
 
 ## Performance
 
-The preview pauses its frame loop when not animating, offscreen, in a hidden tab, or while an export preview is open. The default target is 30 FPS (adjustable from 5 to 60), with real-time simulation independent of the rendering cadence. Unused ring/moon shader paths and moon orbit calculations are skipped. Optional spritesheet/video/batch routines load on demand, and production GLSL literals are compacted without additional runtime packages.
+The preview pauses its frame loop when not animating, when neither the main nor compact preview is visible, in a hidden tab, or while an export preview is open. The default target is 30 FPS (adjustable from 5 to 60), with real-time simulation independent of the rendering cadence. Unused ring/moon shader paths and moon orbit calculations are skipped. Optional spritesheet/video/batch routines load on demand, and production GLSL literals are compacted without additional runtime packages.
 
 The favicon uses the image-generated dark variant, optimized locally to a 64px indexed PNG (1.9 KB).
 
@@ -222,6 +222,37 @@ grid. GIF frame timing preserves the requested duration at fractional
 centisecond frame rates.
 
 There are no runtime dependencies, web fonts, textures or new framework assets.
-The production entry JavaScript is about 26 KB gzip; optional encoders and export
+The production entry JavaScript is about 27 KB gzip; optional encoders and export
 tools remain separate chunks loaded on demand. Browser QA uses software WebGL,
 so rendering throughput on a particular device must be assessed on that device.
+
+
+## Precision editing and creative exploration
+
+Every continuous control has a synchronized numeric input. Type an exact value
+or drag the slider; each finished edit is one undo step. Percentage controls use
+0–100, while other values show the same units as their sliders. **Reset this type**
+restores the authored settings while keeping the seed, output and playback choices.
+Changing **Type** also starts from that type’s authored settings, so a new lava
+world has visible lava rather than inheriting an unrelated world’s parameters.
+Both actions can be undone.
+
+**Browse palette colors** shows named six-color swatches without replacing the
+native palette menu. Palette changes keep the seed. On phones and tablets,
+**Pin preview** keeps a small live view above the controls; **Unpin** and **View
+full planet** remain available there. It copies the existing WebGL render into a
+small 2D canvas; it does not start another shader or renderer. Pinning is a local
+editor preference and does not enter shared planet codes.
+
+**Similar worlds** generates nearby ideas while keeping the current type and
+palette. **All planet types** explores authored families, respects the type and
+palette locks, and uses suitable palette choices and bounded parameter variation.
+Fresh generated worlds and presets fit ring systems inside the frame. Similar
+worlds retain custom framing. Each variation stores the complete settings used
+for its thumbnail, so later edits do not change what selecting it loads.
+
+These refinements were implemented in two successive review-and-improve rounds:
+Terra reviewed precision editing and generation first; Sol independently reviewed
+the resulting UI, framing, palette discovery and mobile editing. Regression tests
+cover all nine generated families, deterministic seeds and locks, complete
+variation selection, ring framing, Toxic control behavior and preview reuse.

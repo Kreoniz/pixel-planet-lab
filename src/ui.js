@@ -1,4 +1,4 @@
-import { controlSections, presetButtons } from "./config.js";
+import { controlSections, presetButtons, palettes } from "./config.js";
 import { controlAvailability } from "./control-availability.js";
 import { shortcuts, actionShortcuts, presetShortcuts, displayShortcut } from "./hotkeys.js";
 import { pixelScaleInfo } from "./editor-state.js";
@@ -56,7 +56,8 @@ export function renderApp(root) {
       </section>
 
       <aside class="panel" aria-label="Generator controls" id="controls">
-        <div class="panel-heading"><div><span class="eyebrow">EDITOR</span><h2>World settings</h2></div><a class="preview-link" href="#studio">↑ Preview</a></div>
+        <div class="panel-heading"><div><span class="eyebrow">EDITOR</span><h2>World settings</h2></div><label class="pin-preview-option"><input type="checkbox" data-preference="pinPreview" /> Pin preview</label><a class="preview-link" href="#studio">↑ Preview</a></div>
+        <div class="compact-preview" data-mini-preview hidden><canvas id="miniPlanetCanvas" width="96" height="96" aria-label="Live planet preview while editing"></canvas><div><strong>Live preview</strong><p>Your changes appear here.</p><div class="compact-actions"><a class="preview-link" href="#studio">View full planet ↑</a><button type="button" data-unpin-preview>Unpin</button></div></div></div>
         <div class="section-links" aria-label="Settings sections">${controlSections.map((section) => `<a href="#section-${section.title.toLowerCase()}" data-section-link>${section.title}</a>`).join("")}</div>
         ${controlSections.map((section) => sectionTemplate(section)).join("")}
       </aside>
@@ -169,6 +170,15 @@ export function syncUi(state) {
       ? Number(state.moons) === 0
       : !state.rings && Number(state.body) !== 8;
   });
+  document.querySelectorAll("[data-palette]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.palette === state.palette));
+  });
+  const swatches = document.querySelector?.("[data-current-palette]");
+  if (swatches && swatches.dataset.palette !== state.palette) {
+    swatches.dataset.palette = state.palette;
+    swatches.innerHTML = paletteColors(state.palette);
+    swatches.setAttribute("aria-label", `${state.palette} palette colors`);
+  }
   document.querySelectorAll("[data-grid-preset]").forEach((button) => {
     button.setAttribute("aria-pressed", String(Number(button.dataset.gridPreset) === Number(state.pixelSize)));
   });
@@ -181,6 +191,10 @@ export function syncUi(state) {
 }
 
 export function syncEditorUi(preferences, { canUndo = false, canRedo = false } = {}) {
+  const pin = document.querySelector?.('[data-preference="pinPreview"]');
+  if (pin) pin.checked = preferences.pinPreview !== false;
+  const mini = document.querySelector?.("[data-mini-preview]");
+  if (mini) mini.hidden = preferences.pinPreview === false;
   const mode = document.querySelector?.('[data-preference="variationMode"]');
   if (mode) mode.value = preferences.variationMode;
   const fps = document.querySelector?.('[data-preference="previewFps"]');
@@ -330,6 +344,10 @@ function sectionTemplate(section) {
   `;
 }
 
+function paletteColors(name) {
+  return (palettes[name] || palettes.aurora).map((color) => `<span style="background:${color}"></span>`).join("");
+}
+
 function controlTemplate(control) {
   const hint = escapeAttr(control.help || "");
   if (control.type === "button") {
@@ -370,6 +388,7 @@ function controlTemplate(control) {
           ${lock}
         </div>
         ${quick}${description}
+        ${key === "palette" ? `<div class="palette-colors" role="img" data-current-palette aria-label="Selected palette colors"></div><details class="palette-browser"><summary>Browse palette colors</summary><div class="palette-options" role="group" aria-label="Palette choices">${Object.keys(palettes).map((name) => `<button type="button" data-palette="${name}" aria-pressed="false" aria-label="Use ${name} palette"><span class="palette-colors" aria-hidden="true">${paletteColors(name)}</span><span>${name[0].toUpperCase() + name.slice(1)}</span></button>`).join("")}</div></details>` : ""}
       </div>`;
   }
 

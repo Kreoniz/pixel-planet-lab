@@ -1,7 +1,7 @@
 // These rules mirror the branches in the fragment shader. Disabled controls retain
 // their values so changing planet type never destroys a customized world.
 const rocky = new Set([0, 2, 3, 4, 5, 6]);
-const waterWorlds = new Set([0, 2, 3, 4, 6]);
+const waterWorlds = new Set([0, 2, 3, 4]);
 const icyWorlds = new Set([0, 2, 3, 4]);
 const ringSettings = new Set([
   "ringRadius", "ringTilt", "ringAngle", "ringWidth",
@@ -34,8 +34,8 @@ export function controlAvailability(key, state) {
     if (!isRocky) return unavailable("Cloud layers are unavailable on this planet type.");
     if (Number(state.clouds) === 0) return unavailable("Increase Clouds to enable cloud speed.");
   }
-  if (key === "storm" && body !== 1 && body !== 7)
-    return unavailable("Storm strength affects gas giants and stars.");
+  if (key === "storm" && body !== 1 && body !== 6 && body !== 7)
+    return unavailable("Storm strength affects gas giants, toxic worlds and stars.");
   if (key === "rings" && body === 8)
     return unavailable("Black holes always have a visible accretion disk.");
   if (ringSettings.has(key) && body !== 8 && !state.rings)

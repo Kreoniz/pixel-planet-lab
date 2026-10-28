@@ -256,3 +256,10 @@ Terra reviewed precision editing and generation first; Sol independently reviewe
 the resulting UI, framing, palette discovery and mobile editing. Regression tests
 cover all nine generated families, deterministic seeds and locks, complete
 variation selection, ring framing, Toxic control behavior and preview reuse.
+
+
+Section navigation scrolls instantly, and control sections open without height
+animation. Desktop section links remain visible inside the scrolling panel.
+Mobile section spacing adapts to whether the compact preview is pinned. Preview
+playback and FPS preferences are grouped under **World → Preview options**;
+Play/Pause remains beside the main timeline.

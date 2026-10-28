@@ -1225,7 +1225,17 @@ function navigateEditorLink(event) {
   event.preventDefault();
   if (destination.tagName === "DETAILS") destination.open = true;
   destination.querySelector("summary, h1")?.focus({ preventScroll: true });
-  destination.scrollIntoView({ block: "start" });
+  const panel = destination.closest?.(".panel");
+  if (panel && getComputedStyle(panel).overflowY === "auto") {
+    document.querySelector("#studio").scrollIntoView({ behavior: "instant", block: "start" });
+    const offset = Number.parseFloat(getComputedStyle(destination).scrollMarginTop) || 0;
+    panel.scrollTo({
+      top: panel.scrollTop + destination.getBoundingClientRect().top - panel.getBoundingClientRect().top - offset,
+      behavior: "instant",
+    });
+  } else {
+    destination.scrollIntoView({ behavior: "instant", block: "start" });
+  }
 }
 
 function readInput(input) {

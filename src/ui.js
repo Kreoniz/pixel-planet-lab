@@ -321,7 +321,7 @@ function sectionTemplate(section) {
   const dependent = section.title === "Moons" || section.title === "Rings";
   const controls = dependent
     ? controlTemplate(section.controls[0]) + `<div class="control-grid control-wide dependent-controls" data-dependent-controls="${section.title}" hidden>${section.controls.slice(1).map(controlTemplate).join("")}</div>`
-    : section.controls.map(controlTemplate).join("");
+    : section.controls.filter((control) => section.title !== "World" || control.key !== "animate").map(controlTemplate).join("");
   const expanded = section.title === "World" || section.title === "Surface" ? " open" : "";
   return `
     <details class="control-section" id="section-${section.title.toLowerCase()}"${expanded}>
@@ -333,11 +333,11 @@ function sectionTemplate(section) {
         ${section.title === "Moons" ? '<p class="section-note control-wide">Off by default. Add moons to reveal their geology and customize their orbits.</p>' : ""}
         ${section.title === "Rings" ? '<p class="section-note control-wide">Enable rings to shape their tilt, width and detail.</p>' : ""}
         ${section.title === "Export" ? exportSettingsTemplate(section) : controls}
-        ${section.title === "World" ? `<button type="button" class="section-reset control-wide" data-action="resetWorld" title="Restore this type’s authored settings while keeping the seed and output settings. You can undo this.">Reset this type · keep seed</button><label class="field field-range control-wide" title="Target animation frame rate, not a guarantee of GPU performance">
+        ${section.title === "World" ? `<button type="button" class="section-reset control-wide" data-action="resetWorld" title="Restore this type’s authored settings while keeping the seed and output settings. You can undo this.">Reset this type · keep seed</button><details class="preview-options control-wide"><summary>Preview options</summary><div class="control-grid">${controlTemplate(section.controls.find((control) => control.key === "animate"))}<label class="field field-range control-wide" title="Target animation frame rate, not a guarantee of GPU performance">
           <span class="field-label">Preview FPS target</span>
           <output data-fps-target>30 FPS</output>
           <input data-preference="previewFps" type="range" min="5" max="60" step="5" />
-        </label>` : ""}
+        </label><p class="section-note control-wide">Preview speed is separate from exported animation FPS.</p></div></details>` : ""}
       </div>
       <a class="section-preview-link" href="#studio">↑ Back to preview</a>
     </details>

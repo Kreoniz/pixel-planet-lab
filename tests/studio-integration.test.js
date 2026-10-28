@@ -217,7 +217,10 @@ test("editor navigation opens and focuses sections without consuming the share f
   const destination = studio.node("#section-moons");
   destination.tagName = "DETAILS";
   destination.querySelector = () => ({ focus() { focused = true; } });
-  destination.scrollIntoView = () => { scrolled = true; };
+  destination.scrollIntoView = (options) => {
+    assert.equal(options.behavior, "instant");
+    scrolled = true;
+  };
   studio.context.window = { location: { hash: "#planet=shared-code" } };
   studio.api.navigateEditorLink({
     currentTarget: { getAttribute: () => "#section-moons" },
@@ -255,4 +258,31 @@ test("the compact editing preview reuses the live render and disables pixel smoo
   assert.equal(copied.length, 1);
   assert.equal(copied[0][0], studio.context.canvas);
   assert.equal(studio.context.miniContext.imageSmoothingEnabled, false);
+});
+
+test("desktop section links scroll the panel without moving its navigation out of view", () => {
+  const studio = createStudio();
+  let returnedToStudio = false, panelScroll;
+  const panel = {
+    scrollTop: 200,
+    getBoundingClientRect: () => ({ top: 14 }),
+    scrollTo(options) { panelScroll = options; },
+  };
+  const destination = studio.node("#section-export");
+  destination.tagName = "DETAILS";
+  destination.closest = () => panel;
+  destination.querySelector = () => null;
+  destination.getBoundingClientRect = () => ({ top: 500 });
+  studio.node("#studio").scrollIntoView = (options) => {
+    assert.equal(options.behavior, "instant");
+    returnedToStudio = true;
+  };
+  studio.context.getComputedStyle = (element) => element === panel
+    ? { overflowY: "auto" } : { scrollMarginTop: "88px" };
+  studio.api.navigateEditorLink({
+    currentTarget: { getAttribute: () => "#section-export" }, preventDefault() {},
+  });
+  assert.equal(returnedToStudio, true);
+  assert.equal(panelScroll.top, 598);
+  assert.equal(panelScroll.behavior, "instant");
 });

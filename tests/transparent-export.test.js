@@ -15,7 +15,7 @@ test("the export section exposes three presets and separate optional layers", ()
   for (const key of ["transparent", "rings", "moons", "glow", "stars"]) {
     assert.ok(html.includes('data-export-option="' + key + '"'));
   }
-  assert.match(html, /PNG \/ spritesheet content/);
+  assert.match(html, /Export layers/);
   assert.match(html, /data-action="previewExport"/);
   assert.match(html, /id="export-preview-dialog"/);
 });

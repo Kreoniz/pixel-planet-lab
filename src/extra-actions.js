@@ -1,11 +1,13 @@
 // Loaded only after the user asks for a batch, spritesheet, or video.
 // The interactive planet preview never needs to download this module.
-import { validateSheetLayout } from "./editor-state.js";
+import { generatePlanet } from "./planet-generator.js";
+import { normalizePlanetState } from "./planet-state.js";
+import { nextPresetState, validateSheetLayout } from "./editor-state.js";
 import { createFramePlan, runFrameSequence } from "./animation-frames.js";
 export async function exportSheet({
   state, simulationSeconds, rotationPhase, spinSpeed, downloadCanvas,
   setStatus, invalidate, clampInt, createFrameRenderer, exportOptions,
-  animationSettings, yieldControl,
+  animationSettings, yieldControl, signal,
 }) {
   const size = clampInt(state.size, 64, 512);
   const frames = clampInt(state.frames, 1, 96);
@@ -31,13 +33,20 @@ export async function exportSheet({
     await runFrameSequence(plan, (sample, i) => {
       const image = renderer.render(sample.time, sample.turn, exportOptions, sample.seamless);
       ctx.drawImage(image, (i % columns) * size, Math.floor(i / columns) * size, size, size);
-    }, { yieldControl });
+    }, {
+      yieldControl, signal,
+      onProgress(frame, count) {
+        if (frame === 1 || frame === count || frame % 5 === 0)
+          setStatus(`Exporting spritesheet ${frame}/${count}`);
+      },
+    });
 
     const suffix = exportOptions.transparent ? "-transparent" : "";
-    await downloadCanvas(sheet, `planet-${state.seed}-sheet${suffix}.png`);
+    await downloadCanvas(sheet, `planet-${state.seed}-sheet${suffix}.png`, { signal });
+    if (signal?.aborted) throw new Error("Sheet export cancelled");
     setStatus(`Exported ${frames}-frame ${exportOptions.transparent ? "transparent" : "opaque"} spritesheet`);
   } catch (error) {
-    setStatus(`Sheet export failed: ${error?.message || "unknown error"}`);
+    setStatus(signal?.aborted ? "Sheet export cancelled" : `Sheet export failed: ${error?.message || "unknown error"}`);
   } finally {
     renderer?.dispose();
     invalidate();
@@ -115,10 +124,12 @@ async function exportAnimated(format, {
     let blob;
     if (apngFrames) {
       const { encodeApng } = await import("./apng-encoder.js");
+      if (signal?.aborted) throw new Error("Animation export cancelled");
       blob = encodeApng(apngFrames, {fps,repeat:animationSettings.repeat});
     } else {
       blob = gif.finish();
     }
+    if (signal?.aborted) throw new Error("Animation export cancelled");
     const suffix = exportOptions.transparent ? "-transparent" : "";
     downloadBlob(blob, "planet-" + state.seed + suffix + "." + format);
     setStatus("Exported " + plan.frames + "-frame " + format.toUpperCase() +
@@ -132,7 +143,7 @@ async function exportAnimated(format, {
   }
 }
 
-export async function exportVideo({ state, canvas, draw, simulationSeconds, rotationPhase, spinSpeed, downloadBlob, setStatus, sleep, clampInt }) {
+export async function exportVideo({ state, canvas, draw, simulationSeconds, rotationPhase, spinSpeed, downloadBlob, setStatus, sleep, clampInt, signal }) {
   if (!window.MediaRecorder || !HTMLCanvasElement.prototype.captureStream) {
     setStatus("Video export is not supported in this browser");
     return;
@@ -182,6 +193,7 @@ export async function exportVideo({ state, canvas, draw, simulationSeconds, rota
 
     recorder.start();
     for (let i = 0; i < totalFrames; i++) {
+      if (signal?.aborted) throw new Error("Video export cancelled");
       const offset = i / fps;
       draw(baseTime + offset, baseTurn + offset * speed);
       ctx.drawImage(canvas, 0, 0, size, size);
@@ -192,13 +204,15 @@ export async function exportVideo({ state, canvas, draw, simulationSeconds, rota
       await sleep(1000 / fps);
     }
 
+    if (signal?.aborted) throw new Error("Video export cancelled");
     recorder.stop();
     await done;
+    if (signal?.aborted) throw new Error("Video export cancelled");
     if (!chunks.length) throw new Error("Recorder produced no video");
     downloadBlob(new Blob(chunks, { type: mimeType || "video/webm" }), `planet-${state.seed}.webm`);
     setStatus(`Exported ${seconds}s WebM at ${fps} fps`);
   } catch (error) {
-    setStatus(`Video export failed: ${error?.message || "unknown error"}`);
+    setStatus(signal?.aborted ? "Video export cancelled" : `Video export failed: ${error?.message || "unknown error"}`);
   } finally {
     if (recorder?.state === "recording") recorder.stop();
     stream?.getTracks().forEach((track) => track.stop());
@@ -206,37 +220,22 @@ export async function exportVideo({ state, canvas, draw, simulationSeconds, rota
 }
 
 export async function generateBatch({
-  state, palettes, canvas, draw, batchStrip, syncUi, normalizeState, resizeCanvas,
-  invalidate, recordEdit, setStatus, clampInt, round, simulationSeconds,
-  signal, yieldControl = () => Promise.resolve(),
+  state, canvas, draw, batchStrip, syncUi, normalizeState, resizeCanvas,
+  invalidate, recordEdit, setStatus, clampInt, simulationSeconds,
+  signal, yieldControl = () => Promise.resolve(), basePlanet = state, editorPrefs = {},
 }) {
-  const count = clampInt(state.batch, 4, 24);
+  const source = normalizePlanetState(basePlanet);
+  const count = clampInt(source.batch, 4, 24);
   const thumbSize = 96;
   batchStrip.replaceChildren();
 
   for (let i = 0; i < count; i++) {
     if (signal?.aborted) return;
     const seed = Math.floor(Math.random() * 999999) + 1;
-    const batchState = {
-      seed,
-      size: thumbSize,
-      pixelSize: thumbSize,
-      body: i % 9,
-      palette: Object.keys(palettes)[i % Object.keys(palettes).length],
-      rings: i % 3 === 0 || i % 9 === 1 || i % 9 === 8,
-      ringRadius: round(0.04 + (i % 5) * 0.08),
-      ringTilt: round(0.25 + (i % 6) * 0.1),
-      ringAngle: round((i * 0.13) % 1),
-      ringWidth: round(0.28 + (i % 4) * 0.15),
-      ringOpacity: 0.72,
-      ringGaps: round(0.2 + (i % 5) * 0.16),
-      ringDetail: round(0.35 + (i % 4) * 0.18),
-      moons: i % 9,
-      moonSpread: round(0.25 + (i % 5) * 0.15),
-      moonTilt: round(0.18 + (i % 6) * 0.12),
-      moonSpeed: round(0.2 + (i % 5) * 0.14),
-      moonSize: round(0.24 + (i % 4) * 0.14),
-    };
+    const batchState = generatePlanet(source, {
+      ...editorPrefs, seed, similar: editorPrefs.variationMode !== "explore",
+    });
+    batchState.moons = 0;
 
     // Restore the shared preview before yielding control. UI edits made while
     // generating variations are never overwritten by stale batch state.
@@ -251,8 +250,8 @@ export async function generateBatch({
     if (!ctx) throw new Error("Could not render variation thumbnail");
     ctx.imageSmoothingEnabled = false;
     try {
-      Object.assign(state, batchState);
-      draw(simulationSeconds + i * 0.1);
+      Object.assign(state, batchState, { size: thumbSize, pixelSize: thumbSize });
+      draw(simulationSeconds);
       ctx.drawImage(canvas, 0, 0);
     } finally {
       Object.assign(state, before);
@@ -262,14 +261,10 @@ export async function generateBatch({
 
     const label = document.createElement("span");
     label.textContent = String(seed);
+    item.setAttribute("aria-label", `Load variation ${i + 1}, seed ${seed}`);
     item.append(thumb, label);
     item.addEventListener("click", () => {
-      const retained = {
-        size: state.size, pixelSize: state.pixelSize, animate: state.animate,
-        frames: state.frames, columns: state.columns, videoSeconds: state.videoSeconds,
-        videoFps: state.videoFps, sheetSeconds: state.sheetSeconds, batch: state.batch,
-      };
-      Object.assign(state, batchState, retained);
+      Object.assign(state, nextPresetState(state, source, batchState, seed));
       normalizeState();
       syncUi(state);
       invalidate();

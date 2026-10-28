@@ -15,11 +15,11 @@ test("gas giants expose storms but not rocky surfaces", () => {
 test("rocky world rules and dependent controls", () => {
   assert.equal(check("lava", { body: 0 }).enabled, false);
   assert.equal(check("lava", { body: 3 }).enabled, true);
-  assert.equal(check("storm", { body: 6 }).enabled, false);
+  assert.equal(check("storm", { body: 6 }).enabled, true);
   assert.equal(check("cloudSpeed", { body: 0, clouds: 0 }).enabled, false);
   assert.equal(check("cloudSpeed", { body: 0, clouds: 0.3 }).enabled, true);
   assert.equal(check("water", { body: 5 }).enabled, false);
-  assert.equal(check("water", { body: 6 }).enabled, true);
+  assert.equal(check("water", { body: 6 }).enabled, false);
 });
 
 test("rings and moons dynamically unlock their settings", () => {

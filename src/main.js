@@ -1,16 +1,21 @@
 import "./styles.css";
-import { palettes, presets, state, defaultPlanetState } from "./config.js";
+import { palettes, presets, state } from "./config.js";
 import { decodePlanetCode, encodePlanetCode, normalizePlanetState } from "./planet-state.js";
 import { renderApp, syncUi, syncEditorUi, syncTimelineUi, syncExportUi, syncAnimationUi } from "./ui.js";
+import { createFramePlan } from "./animation-frames.js";
 import { createAnimationStore, normalizeAnimationSettings, animationSummary } from "./animation-settings.js";
 import { chooseExportPreset, updateExportOption, createExportOptionStore } from "./export-options.js";
-import { createHistory, createSessionStore, normalizePreferences, nextPresetState } from "./editor-state.js";
+import { createHistory, createSessionStore, normalizePreferences } from "./editor-state.js";
 import { registerEditorHotkeys } from "./hotkeys.js";
+import { generatePlanet, resetPlanet } from "./planet-generator.js";
+import { moonOrbitVectors } from "./moon-orbits.js";
 import { installMissingChunkRecovery } from "./missing-chunk-recovery.js";
 
 renderApp(document.querySelector("#app"));
 
 const canvas = document.querySelector("#planetCanvas");
+const miniCanvas = document.querySelector("#miniPlanetCanvas");
+const miniContext = miniCanvas.getContext("2d");
 const gl = canvas.getContext("webgl2", {
   antialias: false,
   alpha: false,
@@ -98,6 +103,7 @@ uniform float uMoonSpread;
 uniform float uMoonTilt;
 uniform float uMoonSpeed;
 uniform float uMoonSize;
+uniform vec4 uMoonData[8];
 
 // Scene-composition flags apply to offscreen exports only. The preview always
 // draws the full opaque scene using defaults supplied by draw().
@@ -422,34 +428,118 @@ vec4 overLayer(vec4 dst, vec3 rgb, float coverage) {
               dst.a * (1.0 - a) + a);
 }
 
+// A moon is a small lit sphere, not a flat grayscale noise disc. Four
+// authored materials keep its colors readable even on a 128px grid.
+vec3 moonRock(vec3 surface, vec3 normal, vec3 light, vec3 geologyLight, float fi) {
+  vec3 seed = vec3(uSeed * 0.013, fi * 9.71, uSeed * 0.007);
+  float kind = mod(floor(uSeed * 0.017) + fi, 4.0);
+  // The closest moon has a material that fits its parent planet; more
+  // distant moons vary independently with the seed and orbital index.
+  if (fi < 0.5) {
+    if (uBody == 0 || uBody == 4) kind = 0.0;
+    else if (uBody == 2) kind = 1.0;
+    else if (uBody == 6) kind = 2.0;
+    else if (uBody == 3) kind = 3.0;
+  }
+
+  vec3 shadow = vec3(0.16, 0.18, 0.20);
+  vec3 mid = vec3(0.39, 0.42, 0.43);
+  vec3 bright = vec3(0.72, 0.73, 0.70);
+  if (kind > 0.5 && kind < 1.5) {
+    // Ice moon: pale blue mineral frost over darker fractures.
+    shadow = vec3(0.14, 0.27, 0.34);
+    mid = vec3(0.43, 0.61, 0.66);
+    bright = vec3(0.83, 0.91, 0.91);
+  } else if (kind > 1.5 && kind < 2.5) {
+    // Iron-rich moon: oxidized ochre regolith.
+    shadow = vec3(0.25, 0.16, 0.14);
+    mid = vec3(0.55, 0.34, 0.28);
+    bright = vec3(0.81, 0.61, 0.47);
+  } else if (kind > 2.5) {
+    // Dark basaltic moon with restrained cool highlights.
+    shadow = vec3(0.10, 0.12, 0.14);
+    mid = vec3(0.28, 0.31, 0.34);
+    bright = vec3(0.50, 0.53, 0.54);
+  }
+
+  float rockField = noise(surface * 5.3 + seed);
+  float grain = noise(surface * 16.0 + seed * 2.3);
+  vec3 rock = mix(shadow, mid, 0.73 + (rockField - 0.5) * 0.28);
+  rock = mix(rock, bright, smoothstep(0.56, 0.81, rockField) * 0.53);
+  rock *= 0.89 + grain * 0.18;
+
+  // Four deterministic circular impact basins: dark floors, thin bright
+  // raised rims. Craters occupy the spherical surface rather than XY noise.
+  float relief = 0.0;
+  for (int crater = 0; crater < 4; crater++) {
+    float k = float(crater);
+    float longitude = hash12(vec2(fi * 17.1 + k * 13.7, uSeed * 0.011)) * 6.2831853;
+    float z = mix(0.18, 0.96, hash12(vec2(k * 7.73, uSeed * 0.019 + fi * 2.1)));
+    vec3 center = vec3(cos(longitude) * sqrt(1.0 - z * z),
+                       sin(longitude) * sqrt(1.0 - z * z), z);
+    float r = mix(0.15, 0.34,
+        hash12(vec2(fi * 3.1 + k * 19.3, uSeed * 0.004)));
+    float chord = length(surface - center);
+    float basin = 1.0 - smoothstep(r * 0.38, r * 0.85, chord);
+    float rim = smoothstep(r * 0.66, r * 0.83, chord) *
+                (1.0 - smoothstep(r * 0.94, r * 1.15, chord));
+    float rimLight = clamp(dot(normalize(surface - center + vec3(0.001)),
+                               geologyLight), -1.0, 1.0);
+    relief -= basin * 0.23;
+    relief += rim * (0.11 + rimLight * 0.075);
+  }
+
+  float ndl = dot(normal, light);
+  float day = smoothstep(-0.15, 0.18, ndl);
+  float irradiance = 0.20 + day * 0.24 + max(ndl, 0.0) * 0.73;
+  vec3 shaded = clamp((rock + vec3(relief)) * irradiance, 0.0, 1.0);
+  // Compact palette-like values preserve sharp, legible moon features.
+  return floor(shaded * 22.0 + 0.5) / 22.0;
+}
+
 vec4 drawMoons(vec4 color, vec2 uv, float radius, vec3 light, float frontPass) {
   if (uMoons <= 0 || uExportMoons < 0.5) return color;
+
+  float bestDepth = -1e6;
+  vec3 nearestMoon = color.rgb;
+  bool foundMoon = false;
   for (int i = 0; i < 8; i++) {
     if (i >= uMoons) break;
     float fi = float(i);
-    float speed = mix(0.08, 0.62, uMoonSpeed) * (1.0 + fi * 0.08);
-    float a = uSeed * 0.0007 + fi * 1.74 + uTime * speed;
-    float orbit = radius * (1.12 + uMoonSpread * 0.58 + fi * mix(0.07, 0.2, uMoonSpread));
-    float tilt = mix(0.16, 0.72, uMoonTilt);
-    vec2 ellipse = vec2(cos(a) * orbit, sin(a) * radius * (tilt + fi * 0.015));
-    vec2 pos = rotate2((uMoonTilt - 0.5) * 0.45 + sin(uSeed + fi) * 0.12) * ellipse;
-    float front = step(0.0, sin(a));
-    if (abs(front - frontPass) > 0.5) continue;
 
-    float r = radius * mix(0.035, 0.12, uMoonSize) * (1.0 + fi * 0.07);
-    float d = length(uv - pos);
-    if (d < r) {
-      vec2 mxy = (uv - pos) / r;
-      float z = sqrt(max(0.0, 1.0 - dot(mxy, mxy)));
-      vec3 n = normalize(vec3(mxy, z));
-      float lit = clamp(dot(n, light), 0.0, 1.0);
-      float pits = fbm(vec3(mxy * 6.0, uSeed + fi));
-      vec3 moon = mix(vec3(0.25), vec3(0.74), pits) * (0.25 + lit * 0.9) * mix(0.74, 1.0, front);
-      color = vec4(moon, 1.0);
-    }
+    // Golden-angle phase spacing gives varied moon arrangements rather
+    // than a row of equally spaced identical grey discs.
+    // Orbital geometry is packed by the CPU once per frame, leaving only
+    // a tiny silhouette test in the full-screen fragment loop.
+    vec4 orbit = uMoonData[i];
+    float r = orbit.z;
+    float depth = orbit.w;
+    if (r <= 0.0) continue;
+    float front = step(0.0, depth);
+    if (abs(front - frontPass) > 0.5) continue;
+    vec2 mxy = (uv - orbit.xy) / r;
+    // Bounding-box rejection avoids expensive crater noise in empty sky.
+    if (abs(mxy.x) >= 1.0 || abs(mxy.y) >= 1.0) continue;
+    float distanceSquared = dot(mxy, mxy);
+    if (distanceSquared >= 1.0 || depth <= bestDepth) continue;
+
+    float z = sqrt(max(0.0, 1.0 - distanceSquared));
+    vec3 normal = normalize(vec3(mxy, z));
+    // Slow synchronous spin preserves stable crater features as moons orbit.
+    // Tidally slow texture rotation; secondary time is frozen for seamless
+    // exported planet rotations, so moon features remain stable in the loop.
+    float orbitSpeed = mix(0.08, 0.62, uMoonSpeed) / sqrt(1.0 + fi * 0.24);
+    float phase = uSeed * 0.0007 + fi * 2.3999632 + uTime * orbitSpeed;
+    float moonSpin = phase * 0.10 + fi * 1.47;
+    vec3 surface = rotateY(normal, moonSpin);
+    nearestMoon = moonRock(surface, normal, light, rotateY(light, moonSpin), fi);
+    bestDepth = depth;
+    foundMoon = true;
   }
+  if (foundMoon) return vec4(nearestMoon, 1.0);
   return color;
 }
+
 
 // A fixed 4x4 Bayer threshold map, expressed without dynamic array indexing.
 float bayer4(vec2 pixel) {
@@ -693,6 +783,8 @@ let fpsFrames = 0;
 let fpsTime = 0;
 let recordingVideo = false;
 let previewVisible = true;
+let fullPreviewVisible = true;
+let miniPreviewVisible = !("IntersectionObserver" in window);
 let framePending = false;
 let lastRenderedMs = -Infinity;
 const session = createSessionStore(() => window.localStorage);
@@ -702,7 +794,8 @@ let exportOptions = exportOptionStore.load();
 const animationStore = createAnimationStore(() => window.localStorage);
 let animationSettings = animationStore.load();
 let animationPreviewLoop = null;
-let activeAnimatedController = null;
+let previewRequest = 0;
+let activeExportController = null;
 let editHistory;
 let simulationSeconds = 0;
 let batchController = null;
@@ -722,7 +815,7 @@ if (!gl) {
   gl.useProgram(program);
   bindUi();
   syncExportUi(exportOptions);
-  syncAnimationUi(animationSettings);
+  syncAnimationUi(animationSettings, { busy: Boolean(activeExportController) });
   // A shared link takes precedence over the most recently saved local world.
   if (!new URLSearchParams(window.location.hash.slice(1)).has("planet")) {
     const saved = session.loadPlanetCode();
@@ -748,11 +841,17 @@ if (!gl) {
     if (!document.hidden) requestFrame();
   });
   if ("IntersectionObserver" in window) {
-    new IntersectionObserver(([entry]) => {
-      previewVisible = entry.isIntersecting;
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.target === canvas) fullPreviewVisible = entry.isIntersecting;
+        else miniPreviewVisible = entry.isIntersecting;
+      }
+      previewVisible = fullPreviewVisible || miniPreviewVisible;
       lastTickSeconds = 0;
-      if (previewVisible) requestFrame();
-    }).observe(canvas);
+      if (previewVisible) invalidate();
+    });
+    observer.observe(canvas);
+    observer.observe(miniCanvas);
   }
 }
 
@@ -793,6 +892,7 @@ function collectUniforms(shaderProgram) {
     "uSeed",
     "uBody",
     "uMoons",
+    "uMoonData[0]",
     "uPalette[0]",
     "uZoom",
     "uLightX",
@@ -827,13 +927,14 @@ function collectUniforms(shaderProgram) {
     "uExportRings",
     "uExportGlow",
     "uExportStars",
+    "uExportLoop",
   ];
   return Object.fromEntries(names.map((name) => [name, gl.getUniformLocation(shaderProgram, name)]));
 }
 
 function requestFrame() {
   // Don't schedule an idle frame loop when the preview is offscreen or paused.
-  if (framePending || !gl || document.hidden || !previewVisible || recordingVideo) return;
+  if (framePending || !gl || document.hidden || !previewVisible || recordingVideo || isPreviewOpen()) return;
   framePending = true;
   requestAnimationFrame(tick);
 }
@@ -845,7 +946,7 @@ function invalidate() {
 
 function tick(time) {
   framePending = false;
-  if (document.hidden || !previewVisible || recordingVideo) return;
+  if (document.hidden || !previewVisible || recordingVideo || isPreviewOpen()) return;
 
   // Avoid driving high-cost procedural shaders at 60–144 FPS.
   if (state.animate && !dirty && time - lastRenderedMs < 1000 / editorPrefs.previewFps) {
@@ -855,8 +956,8 @@ function tick(time) {
 
   const nowSeconds = time * 0.001;
   if (!lastTickSeconds) lastTickSeconds = nowSeconds;
-  const delta = Math.max(0, Math.min(nowSeconds - lastTickSeconds, 0.1));
-  lastTickSeconds = nowSeconds;
+  const delta = Math.max(0, nowSeconds - lastTickSeconds);
+  lastTickSeconds = state.animate ? nowSeconds : 0;
   if (state.animate) {
     simulationSeconds += delta;
     rotationPhase += delta * spinSpeed();
@@ -865,6 +966,10 @@ function tick(time) {
   if (state.animate || dirty) {
     // All shader effects use the same simulation clock. Paused worlds cannot jump.
     draw(simulationSeconds);
+    if (miniContext && miniPreviewVisible) {
+      miniContext.imageSmoothingEnabled = false;
+      miniContext.drawImage(canvas, 0, 0, miniCanvas.width, miniCanvas.height);
+    }
     dirty = false;
     lastRenderedMs = time;
     syncTimelineUi(simulationSeconds, state.animate);
@@ -878,49 +983,51 @@ function tick(time) {
   if (state.animate) requestFrame();
 }
 
-function draw(timeSeconds = simulationSeconds, turn = rotationPhase, target = null) {
-  if (!target) resizeCanvas();
+function draw(timeSeconds = simulationSeconds, turn = rotationPhase, target = null, planet = state) {
+  if (!target) resizeCanvas(planet);
   gl.bindFramebuffer(gl.FRAMEBUFFER, target?.framebuffer ?? null);
   const size = target?.size ?? canvas.width;
   gl.viewport(0, 0, size, size);
   gl.useProgram(program);
 
-  const palette = paletteVectors[state.palette] || paletteVectors.aurora;
+  const palette = paletteVectors[planet.palette] || paletteVectors.aurora;
   gl.uniform2f(uniforms.uResolution, size, size);
   gl.uniform1f(uniforms.uTime, timeSeconds);
   gl.uniform1f(uniforms.uTurn, turn);
-  gl.uniform1f(uniforms.uSeed, Number(state.seed) || 1);
-  gl.uniform1i(uniforms.uBody, Number(state.body));
-  gl.uniform1i(uniforms.uMoons, Number(state.moons));
+  gl.uniform1f(uniforms.uSeed, Number(planet.seed) || 1);
+  gl.uniform1i(uniforms.uBody, Number(planet.body));
+  gl.uniform1i(uniforms.uMoons, Number(planet.moons));
+  if (Number(planet.moons) > 0 && target?.options?.moons !== false)
+    gl.uniform4fv(uniforms["uMoonData[0]"], moonOrbitVectors(planet, timeSeconds));
   gl.uniform3fv(uniforms["uPalette[0]"], palette);
-  gl.uniform1f(uniforms.uZoom, Number(state.zoom));
-  gl.uniform1f(uniforms.uLightX, Number(state.lightX));
-  gl.uniform1f(uniforms.uLightY, Number(state.lightY));
-  gl.uniform1f(uniforms.uWater, Number(state.water));
-  gl.uniform1f(uniforms.uTerrain, Number(state.terrain));
-  gl.uniform1f(uniforms.uRoughness, Number(state.roughness));
-  gl.uniform1f(uniforms.uClouds, Number(state.clouds));
-  gl.uniform1f(uniforms.uCloudSpeed, Number(state.cloudSpeed));
-  gl.uniform1f(uniforms.uAtmosphere, Number(state.atmosphere));
-  gl.uniform1f(uniforms.uStars, Number(state.stars));
-  gl.uniform1f(uniforms.uCity, Number(state.city));
-  gl.uniform1f(uniforms.uStorm, Number(state.storm));
-  gl.uniform1f(uniforms.uIce, Number(state.ice));
-  gl.uniform1f(uniforms.uLava, Number(state.lava));
-  gl.uniform1f(uniforms.uRings, state.rings ? 1 : 0);
-  gl.uniform1f(uniforms.uRingRadius, Number(state.ringRadius));
-  gl.uniform1f(uniforms.uRingTilt, Number(state.ringTilt));
-  gl.uniform1f(uniforms.uRingAngle, Number(state.ringAngle));
-  gl.uniform1f(uniforms.uRingWidth, Number(state.ringWidth));
-  gl.uniform1f(uniforms.uRingOpacity, Number(state.ringOpacity));
-  gl.uniform1f(uniforms.uRingGaps, Number(state.ringGaps));
-  gl.uniform1f(uniforms.uRingDetail, Number(state.ringDetail));
-  gl.uniform1f(uniforms.uShade, Number(state.shade));
-  gl.uniform1f(uniforms.uDither, Number(state.dither));
-  gl.uniform1f(uniforms.uMoonSpread, Number(state.moonSpread));
-  gl.uniform1f(uniforms.uMoonTilt, Number(state.moonTilt));
-  gl.uniform1f(uniforms.uMoonSpeed, Number(state.moonSpeed));
-  gl.uniform1f(uniforms.uMoonSize, Number(state.moonSize));
+  gl.uniform1f(uniforms.uZoom, Number(planet.zoom));
+  gl.uniform1f(uniforms.uLightX, Number(planet.lightX));
+  gl.uniform1f(uniforms.uLightY, Number(planet.lightY));
+  gl.uniform1f(uniforms.uWater, Number(planet.water));
+  gl.uniform1f(uniforms.uTerrain, Number(planet.terrain));
+  gl.uniform1f(uniforms.uRoughness, Number(planet.roughness));
+  gl.uniform1f(uniforms.uClouds, Number(planet.clouds));
+  gl.uniform1f(uniforms.uCloudSpeed, Number(planet.cloudSpeed));
+  gl.uniform1f(uniforms.uAtmosphere, Number(planet.atmosphere));
+  gl.uniform1f(uniforms.uStars, Number(planet.stars));
+  gl.uniform1f(uniforms.uCity, Number(planet.city));
+  gl.uniform1f(uniforms.uStorm, Number(planet.storm));
+  gl.uniform1f(uniforms.uIce, Number(planet.ice));
+  gl.uniform1f(uniforms.uLava, Number(planet.lava));
+  gl.uniform1f(uniforms.uRings, planet.rings ? 1 : 0);
+  gl.uniform1f(uniforms.uRingRadius, Number(planet.ringRadius));
+  gl.uniform1f(uniforms.uRingTilt, Number(planet.ringTilt));
+  gl.uniform1f(uniforms.uRingAngle, Number(planet.ringAngle));
+  gl.uniform1f(uniforms.uRingWidth, Number(planet.ringWidth));
+  gl.uniform1f(uniforms.uRingOpacity, Number(planet.ringOpacity));
+  gl.uniform1f(uniforms.uRingGaps, Number(planet.ringGaps));
+  gl.uniform1f(uniforms.uRingDetail, Number(planet.ringDetail));
+  gl.uniform1f(uniforms.uShade, Number(planet.shade));
+  gl.uniform1f(uniforms.uDither, Number(planet.dither));
+  gl.uniform1f(uniforms.uMoonSpread, Number(planet.moonSpread));
+  gl.uniform1f(uniforms.uMoonTilt, Number(planet.moonTilt));
+  gl.uniform1f(uniforms.uMoonSpeed, Number(planet.moonSpeed));
+  gl.uniform1f(uniforms.uMoonSize, Number(planet.moonSize));
   const layers = target?.options;
   gl.uniform1f(uniforms.uExportTransparent, layers?.transparent ? 1 : 0);
   gl.uniform1f(uniforms.uExportMoons, layers?.moons === false ? 0 : 1);
@@ -931,8 +1038,8 @@ function draw(timeSeconds = simulationSeconds, turn = rotationPhase, target = nu
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
-function resizeCanvas() {
-  const size = renderSize();
+function resizeCanvas(planet = state) {
+  const size = renderSize(planet);
   if (canvas.width !== size || canvas.height !== size) {
     canvas.width = size;
     canvas.height = size;
@@ -951,6 +1058,8 @@ function bindUi() {
         return;
       }
       state[input.dataset.key] = readInput(input);
+      if (input.dataset.key === "body") Object.assign(state, resetPlanet(state));
+      if (input.dataset.key === "animate") lastTickSeconds = 0;
       normalizeState();
       syncUi(state);
       invalidate();
@@ -983,7 +1092,16 @@ function bindUi() {
       const value = input.type === "checkbox" ? input.checked : Number(input.value);
       animationSettings = normalizeAnimationSettings({ ...animationSettings, [name]: value });
       animationStore.save(animationSettings);
-      syncAnimationUi(animationSettings);
+      syncAnimationUi(animationSettings, { busy: Boolean(activeExportController) });
+    });
+  });
+
+  document.querySelectorAll("[data-palette]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.palette = button.dataset.palette;
+      syncUi(state);
+      invalidate();
+      recordEdit();
     });
   });
 
@@ -1004,9 +1122,16 @@ function bindUi() {
     });
   });
 
+  document.querySelector("[data-unpin-preview]").addEventListener("click", () => {
+    editorPrefs.pinPreview = false;
+    session.savePreferences(editorPrefs);
+    syncEditorUi(editorPrefs, editHistory);
+    invalidate();
+  });
+
   document.querySelectorAll("[data-preference]").forEach((input) => {
-    input.addEventListener("input", () => {
-      Object.assign(editorPrefs, normalizePreferences({ ...editorPrefs, [input.dataset.preference]: Number(input.value) }));
+    input.addEventListener(input.type === "range" ? "input" : "change", () => {
+      Object.assign(editorPrefs, normalizePreferences({ ...editorPrefs, [input.dataset.preference]: input.type === "checkbox" ? input.checked : input.type === "range" ? Number(input.value) : input.value }));
       session.savePreferences(editorPrefs);
       syncEditorUi(editorPrefs, editHistory);
       fpsFrames = 0;
@@ -1032,6 +1157,10 @@ function bindUi() {
     button.addEventListener("click", () => actions[button.dataset.action]());
   });
 
+  document.querySelectorAll("[data-section-link], .preview-link, .section-preview-link").forEach((link) => {
+    link.addEventListener("click", navigateEditorLink);
+  });
+
   document.querySelectorAll("[data-preset]").forEach((button) => {
     button.addEventListener("click", () => {
       applyPreset(button.dataset.preset);
@@ -1043,8 +1172,9 @@ function bindUi() {
     "click", () => exportDialog.close(),
   );
   exportDialog.addEventListener("close", () => {
-    animationPreviewLoop?.stop();
-    animationPreviewLoop = null;
+    stopAnimationPreview();
+    lastTickSeconds = 0;
+    invalidate();
   });
   document.querySelector("[data-animation-preview-toggle]").addEventListener("click", () => {
     animationPreviewLoop?.toggle();
@@ -1063,10 +1193,16 @@ function bindUi() {
     choosePreset: applyPreset,
     toggleHelp: toggleShortcuts,
     isHelpOpen: () => shortcutDialog.open,
+    isModalOpen: () => exportDialog.open || shortcutDialog.open,
+  });
+
+  document.querySelector("[data-light-edit]").addEventListener("change", (event) => {
+    canvas.dataset.lightEditing = String(event.target.checked);
   });
 
   let draggingLight = false;
   canvas.addEventListener("pointerdown", (event) => {
+    if (!document.querySelector("[data-light-edit]").checked) return;
     draggingLight = true;
     canvas.setPointerCapture(event.pointerId);
     setLightFromPointer(event);
@@ -1082,9 +1218,33 @@ function bindUi() {
   }
 }
 
+function navigateEditorLink(event) {
+  const destination = document.querySelector(event.currentTarget.getAttribute("href"));
+  if (!destination) return;
+  // The URL fragment belongs to the shared planet, not editor navigation.
+  event.preventDefault();
+  if (destination.tagName === "DETAILS") destination.open = true;
+  destination.querySelector("summary, h1")?.focus({ preventScroll: true });
+  const panel = destination.closest?.(".panel");
+  if (panel && getComputedStyle(panel).overflowY === "auto") {
+    document.querySelector("#studio").scrollIntoView({ behavior: "instant", block: "start" });
+    const offset = Number.parseFloat(getComputedStyle(destination).scrollMarginTop) || 0;
+    panel.scrollTo({
+      top: panel.scrollTop + destination.getBoundingClientRect().top - panel.getBoundingClientRect().top - offset,
+      behavior: "instant",
+    });
+  } else {
+    destination.scrollIntoView({ behavior: "instant", block: "start" });
+  }
+}
+
 function readInput(input) {
   if (input.type === "checkbox") return input.checked;
-  if (input.dataset.format === "percent") return Number(input.value) / 100;
+  if (input.dataset.format === "percent") return Math.round(Number(input.value)) / 100;
+  if (input.type === "number" && input.dataset.precision !== undefined) {
+    const step = Number(input.step);
+    return Number((Math.round(Number(input.value) / step) * step).toFixed(6));
+  }
   if (input.type === "number" || input.type === "range") return Number(input.value);
   return input.value;
 }
@@ -1114,6 +1274,7 @@ function restoreHistory(direction) {
   if (!next) return;
   batchController?.abort();
   Object.assign(state, next);
+  lastTickSeconds = 0;
   normalizeState();
   syncUi(state);
   syncEditorUi(editorPrefs, editHistory);
@@ -1123,7 +1284,7 @@ function restoreHistory(direction) {
 }
 
 function seekSimulation(seconds) {
-  const next = Math.max(0, Math.min(60, seconds));
+  const next = Math.max(0, seconds);
   rotationPhase += (next - simulationSeconds) * spinSpeed();
   simulationSeconds = next;
   state.animate = false;
@@ -1154,6 +1315,13 @@ const actions = {
     recordEdit();
     setStatus(state.animate ? "Animation resumed" : "Animation paused");
   },
+  resetWorld() {
+    Object.assign(state, resetPlanet(state));
+    syncUi(state);
+    invalidate();
+    recordEdit();
+    setStatus("Restored this planet type’s preset · seed kept · Undo to restore your edits");
+  },
   randomize() {
     randomize();
   },
@@ -1161,24 +1329,29 @@ const actions = {
     mutate();
   },
   async previewExport() {
+    stopAnimationPreview();
+    const request = previewRequest;
+    const snapshot = captureExport();
     let renderer;
     try {
-      animationPreviewLoop?.stop();
-      animationPreviewLoop = null;
-      const { createExportRenderer } = await import("./export-renderer.js");
-      renderer = createExportRenderer(gl, draw, renderSize());
-      const frame = renderer.render(simulationSeconds, rotationPhase, exportOptions);
+      renderer = await snapshot.createFrameRenderer();
+      if (request !== previewRequest) return;
+      const frame = renderer.render(snapshot.simulationSeconds, snapshot.rotationPhase, snapshot.exportOptions);
       const preview = document.querySelector("#export-preview-canvas");
+      preview.width = preview.height = snapshot.state.size;
       const ctx = preview.getContext("2d");
       if (!ctx) throw new Error("Preview canvas unavailable");
       ctx.clearRect(0, 0, preview.width, preview.height);
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(frame, 0, 0, preview.width, preview.height);
-      document.querySelector("#export-preview-title").textContent = "Export preview";
+      ctx.drawImage(exportCanvas(frame, snapshot.state.size), 0, 0);
+      document.querySelector("#export-preview-title").textContent = "PNG preview";
+      document.querySelector("[data-preview-description]").textContent =
+        `${snapshot.state.size} × ${snapshot.state.size} px · ${snapshot.exportOptions.transparent ? "Transparent" : "Full background"}`;
       document.querySelector("[data-export-preview-playback]").hidden = true;
       document.querySelector("#export-preview-dialog").showModal();
     } catch (error) {
-      setStatus(`Export preview failed: ${error?.message || "unknown error"}`);
+      if (request === previewRequest)
+        setStatus(`Export preview failed: ${error?.message || "unknown error"}`);
     } finally {
       renderer?.dispose();
       invalidate();
@@ -1189,55 +1362,59 @@ const actions = {
       setStatus("Reduce length or FPS to 120 frames or fewer");
       return;
     }
+    stopAnimationPreview();
+    const request = previewRequest;
+    const snapshot = captureExport();
     let renderer;
     try {
-      const [{ createExportRenderer }, { createFramePlan },
-        { startAnimationPreview }] = await Promise.all([
-          import("./export-renderer.js"),
-          import("./animation-frames.js"),
-          import("./animation-preview.js"),
-        ]);
-      renderer = createExportRenderer(gl, draw, renderSize());
+      const { startAnimationPreview } = await import("./animation-preview.js");
+      if (request !== previewRequest) return;
+      renderer = await snapshot.createFrameRenderer();
+      if (request !== previewRequest) return;
       const plan = createFramePlan({
-        seconds: animationSettings.seconds,
-        fps: animationSettings.fps,
-        seamless: animationSettings.seamless,
-        baseTime: simulationSeconds,
-        baseTurn: rotationPhase,
-        spinSpeed: spinSpeed(),
+        ...snapshot.animationSettings,
+        baseTime: snapshot.simulationSeconds,
+        baseTurn: snapshot.rotationPhase,
+        spinSpeed: snapshot.spinSpeed(),
       });
       const dialog = document.querySelector("#export-preview-dialog");
-      document.querySelector("#export-preview-title").textContent = "Animated export preview";
+      document.querySelector("#export-preview-title").textContent = "Animation preview";
+      document.querySelector("[data-preview-description]").textContent =
+        `${snapshot.state.size} × ${snapshot.state.size} px · ${plan.frames} frames · ${plan.fps} FPS`;
+      const previewCanvas = document.querySelector("#export-preview-canvas");
+      previewCanvas.width = previewCanvas.height = snapshot.state.size;
       const playback = document.querySelector("[data-export-preview-playback]");
       playback.hidden = false;
       dialog.showModal();
       animationPreviewLoop = startAnimationPreview({
-        renderer, plan, options: { ...exportOptions },
+        renderer, plan, options: snapshot.exportOptions,
         canvas: document.querySelector("#export-preview-canvas"),
         label: document.querySelector("[data-preview-frame]"),
-        repeat: animationSettings.repeat,
+        repeat: snapshot.animationSettings.repeat,
         onPlaybackChange: (playing) => {
           document.querySelector("[data-animation-preview-toggle]").textContent = playing ? "Pause" : "Play";
         },
       });
       renderer = null; // preview loop owns the framebuffer lifecycle
     } catch (error) {
-      document.querySelector("#export-preview-dialog").close();
-      setStatus(`Animation preview failed: ${error?.message || "unknown error"}`);
+      if (request === previewRequest) {
+        document.querySelector("#export-preview-dialog").close();
+        setStatus(`Animation preview failed: ${error?.message || "unknown error"}`);
+      }
     } finally {
       renderer?.dispose();
       invalidate();
     }
   },
   async exportPng() {
+    const snapshot = captureExport();
     let renderer;
     try {
-      const { createExportRenderer } = await import("./export-renderer.js");
-      renderer = createExportRenderer(gl, draw, renderSize());
-      const frame = renderer.render(simulationSeconds, rotationPhase, exportOptions);
-      const suffix = exportOptions.transparent ? "-transparent" : "";
-      await downloadCanvas(exportCanvas(frame), `planet-${state.seed}${suffix}.png`);
-      setStatus(`Exported ${exportOptions.transparent ? "transparent" : "opaque"} PNG ${state.size}×${state.size}`);
+      renderer = await snapshot.createFrameRenderer();
+      const frame = renderer.render(snapshot.simulationSeconds, snapshot.rotationPhase, snapshot.exportOptions);
+      const suffix = snapshot.exportOptions.transparent ? "-transparent" : "";
+      await downloadCanvas(exportCanvas(frame, snapshot.state.size), `planet-${snapshot.state.seed}${suffix}.png`);
+      setStatus(`Exported ${snapshot.exportOptions.transparent ? "transparent" : "opaque"} PNG ${snapshot.state.size}×${snapshot.state.size}`);
     } catch (error) {
       setStatus(`PNG export failed: ${error?.message || "unknown error"}`);
     } finally {
@@ -1254,9 +1431,9 @@ const actions = {
   exportApng() { runExtra("exportApng"); },
   exportGif() { runExtra("exportGif"); },
   cancelAnimatedExport() {
-    if (activeAnimatedController) {
-      activeAnimatedController.abort();
-      setStatus("Animation export cancelled");
+    if (activeExportController) {
+      activeExportController.abort();
+      setStatus("Export cancelled");
     }
   },
   copyCode() {
@@ -1289,6 +1466,7 @@ const actions = {
 
 function applyPlanetCode(code) {
   Object.assign(state, decodePlanetCode(code));
+  lastTickSeconds = 0;
   normalizeState();
   syncUi(state);
   invalidate();
@@ -1310,7 +1488,7 @@ function applyPreset(name) {
   const preset = presets[name];
   if (!preset) return;
   const seed = Math.floor(Math.random() * 999999) + 1;
-  Object.assign(state, nextPresetState(state, defaultPlanetState, preset, seed));
+  Object.assign(state, resetPlanet({ ...state, body: preset.body, seed }));
   normalizeState();
   syncUi(state);
   invalidate();
@@ -1320,62 +1498,25 @@ function applyPreset(name) {
 
 function randomize() {
   const seed = Math.floor(Math.random() * 999999) + 1;
-  const rng = mulberry32(seed);
-  const keys = Object.keys(presets);
-  const previousPalette = state.palette;
-  const choice = editorPrefs.lockType
-    ? Object.values(presets).find((p) => Number(p.body) === Number(state.body)) || presets.terrestrial
-    : presets[keys[Math.floor(rng() * keys.length)]];
-  Object.assign(state, nextPresetState(state, defaultPlanetState, choice, seed));
-  state.palette = editorPrefs.lockPalette
-    ? previousPalette
-    : Object.keys(palettes)[Math.floor(rng() * Object.keys(palettes).length)];
-  state.zoom = round(0.82 + rng() * 0.24);
-  state.spin = round(0.08 + rng() * 0.58);
-  state.terrain = round(rng());
-  state.water = round(rng());
-  state.roughness = round(rng());
-  state.clouds = round(rng() * 0.9);
-  state.cloudSpeed = round(rng() * 0.75);
-  state.atmosphere = round(0.2 + rng() * 0.8);
-  state.rings = rng() > 0.6;
-  state.ringRadius = round(0.04 + rng() * 0.42);
-  state.ringTilt = round(0.15 + rng() * 0.75);
-  state.ringAngle = round(rng());
-  state.ringWidth = round(0.2 + rng() * 0.8);
-  state.ringOpacity = round(0.42 + rng() * 0.58);
-  state.ringGaps = round(rng());
-  state.ringDetail = round(0.25 + rng() * 0.75);
-  state.moons = Math.floor(rng() * 9);
-  state.moonSpread = round(rng());
-  state.moonTilt = round(rng());
-  state.moonSpeed = round(0.12 + rng() * 0.78);
-  state.moonSize = round(0.18 + rng() * 0.68);
-  state.lightX = round(-0.85 + rng() * 1.7);
-  state.lightY = round(-0.75 + rng() * 1.5);
-  normalizeState();
+  Object.assign(state, generatePlanet(state, { ...editorPrefs, seed }));
   syncUi(state);
   invalidate();
   recordEdit();
-  setStatus(`Random seed ${state.seed}`);
+  setStatus(`New world · seed ${state.seed}`);
 }
 
 function mutate() {
-  const rng = mulberry32((Number(state.seed) || 1) + 1337);
-  state.seed = Math.floor(rng() * 999999) + 1;
-  ["terrain", "water", "roughness", "clouds", "storm", "ice", "lava", "city", "ringRadius", "ringTilt", "ringAngle", "ringWidth", "ringOpacity", "ringGaps", "ringDetail", "moonSpread", "moonTilt", "moonSpeed", "moonSize"].forEach((key) => {
-    state[key] = round(clamp(Number(state[key]) + (rng() - 0.5) * 0.26, 0, 1));
-  });
-  normalizeState();
+  const seed = Math.floor(Math.random() * 999999) + 1;
+  Object.assign(state, generatePlanet(state, { seed, similar: true }));
   syncUi(state);
   invalidate();
   recordEdit();
-  setStatus(`Mutated seed ${state.seed}`);
+  setStatus(`Related world · seed ${state.seed}`);
 }
 
 // Optional tools form a separate chunk and are fetched only on first use.
 async function runExtra(action) {
-  if (recordingVideo || activeAnimatedController || !gl) return;
+  if (recordingVideo || activeExportController || !gl) return;
   const isVideo = action === "exportVideo";
   const isAnimated = action === "exportApng" || action === "exportGif";
   const isBatch = action === "generateBatch";
@@ -1385,28 +1526,29 @@ async function runExtra(action) {
   }
   if (isVideo) recordingVideo = true;
   if (isBatch) batchController?.abort();
-  const controller = isBatch || isAnimated ? new AbortController() : null;
+  const controller = new AbortController();
   if (isBatch) batchController = controller;
-  if (isAnimated) {
-    activeAnimatedController = controller;
-    document.querySelector('[data-action="cancelAnimatedExport"]').hidden = false;
+  if (!isBatch) {
+    activeExportController = controller;
+    setExportBusy(true);
+    setStatus(isVideo ? "Preparing video export…" : isAnimated ? "Preparing animation export…" : "Preparing spritesheet export…");
   }
 
+  const snapshot = captureExport();
+  const generationPreferences = { ...editorPrefs };
   try {
     const extra = await import("./extra-actions.js");
     if (controller?.signal.aborted) return;
     await extra[action]({
-      state, palettes, canvas, draw, batchStrip,
-      simulationSeconds, rotationPhase, spinSpeed, downloadCanvas, downloadBlob,
+      ...snapshot,
+      // Batch generation deliberately edits the live state temporarily; exports
+      // use the world captured before their first lazy import or yielded frame.
+      ...(isBatch ? { state, draw } : {}),
+      palettes, canvas, batchStrip, downloadCanvas, downloadBlob,
+      basePlanet: snapshot.state, editorPrefs: generationPreferences,
       syncUi, normalizeState, resizeCanvas, invalidate, recordEdit,
-      setStatus, clampInt, round, sleep,
+      setStatus, clampInt, sleep,
       signal: controller?.signal,
-      exportOptions: { ...exportOptions },
-      animationSettings: { ...animationSettings },
-      createFrameRenderer: async () => {
-        const { createExportRenderer } = await import("./export-renderer.js");
-        return createExportRenderer(gl, draw, renderSize());
-      },
       yieldControl: () => new Promise((resolve) => setTimeout(resolve, 0)),
     });
   } catch (error) {
@@ -1414,30 +1556,67 @@ async function runExtra(action) {
       isAnimated ? "Animation export" : "Video export";
     if (!controller?.signal.aborted) setStatus(`${label} failed: ${error?.message || "unknown error"}`);
   } finally {
-    if (isVideo) recordingVideo = false;
+    if (isVideo) {
+      recordingVideo = false;
+      lastTickSeconds = 0;
+    }
     if (isBatch && batchController === controller) batchController = null;
-    if (isAnimated && activeAnimatedController === controller) {
-      activeAnimatedController = null;
-      document.querySelector('[data-action="cancelAnimatedExport"]').hidden = true;
+    if (!isBatch && activeExportController === controller) {
+      activeExportController = null;
+      setExportBusy(false);
     }
     invalidate();
   }
+}
+
+function setExportBusy(busy) {
+  document.querySelectorAll("[data-export-start]").forEach((button) => { button.disabled = busy; });
+  document.querySelector('[data-action="cancelAnimatedExport"]').hidden = !busy;
+  syncAnimationUi(animationSettings, { busy });
+}
+
+function isPreviewOpen() {
+  return document.querySelector("#export-preview-dialog").open;
+}
+
+function stopAnimationPreview() {
+  previewRequest += 1;
+  animationPreviewLoop?.stop();
+  animationPreviewLoop = null;
+}
+
+function captureExport() {
+  const planet = { ...state };
+  const drawSnapshot = (time, turn, target) => draw(time, turn, target, planet);
+  return {
+    state: planet,
+    simulationSeconds,
+    rotationPhase,
+    spinSpeed: () => spinSpeed(planet),
+    draw: drawSnapshot,
+    exportOptions: { ...exportOptions },
+    animationSettings: { ...animationSettings },
+    createFrameRenderer: async () => {
+      const { createExportRenderer } = await import("./export-renderer.js");
+      return createExportRenderer(gl, drawSnapshot, renderSize(planet));
+    },
+  };
 }
 
 function normalizeState() {
   Object.assign(state, normalizePlanetState(state));
 }
 
-function renderSize() {
-  return clampInt(state.pixelSize, 32, 512);
+function renderSize(planet = state) {
+  return clampInt(planet.pixelSize, 32, 512);
 }
 
-function spinSpeed() {
-  return 0.18 + Number(state.spin) * 1.35;
+function spinSpeed(planet = state) {
+  return 0.18 + Number(planet.spin) * 1.35;
 }
 
-function exportCanvas(source = canvas) {
-  const size = clampInt(state.size, 64, 512);
+function exportCanvas(source = canvas, outputSize = state.size) {
+  const size = clampInt(outputSize, 64, 512);
   if (source.width === size && source.height === size) return source;
   const output = document.createElement("canvas");
   output.width = size;
@@ -1470,9 +1649,17 @@ async function copyText(value, successMessage) {
   }
 }
 
-function downloadCanvas(sourceCanvas, filename) {
+function downloadCanvas(sourceCanvas, filename, { signal } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Export cancelled"));
+      return;
+    }
     sourceCanvas.toBlob((blob) => {
+      if (signal?.aborted) {
+        reject(new Error("Export cancelled"));
+        return;
+      }
       if (!blob) {
         reject(new Error("Could not encode PNG"));
         return;
@@ -1516,15 +1703,9 @@ function updateFps(time) {
 
 function setStatus(message) {
   statusEl.textContent = message;
-}
-
-function mulberry32(seed) {
-  return function rng() {
-    let t = (seed += 0x6d2b79f5);
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+  if (/export|encoding|recording/i.test(message)) {
+    document.querySelector("[data-export-feedback]").textContent = message;
+  }
 }
 
 function clamp(value, min, max) {
@@ -1535,6 +1716,3 @@ function clampInt(value, min, max) {
   return Math.round(clamp(value, min, max));
 }
 
-function round(value) {
-  return Math.round(value * 100) / 100;
-}

@@ -4,6 +4,8 @@ export const editorDefaults = Object.freeze({
   previewFps: 30,
   lockType: false,
   lockPalette: false,
+  variationMode: "similar",
+  pinPreview: true,
 });
 
 export const sessionKey = "pixel-planet-lab.session.v1";
@@ -17,6 +19,8 @@ export function normalizePreferences(input = {}) {
       ? Math.round(fps / 5) * 5 : editorDefaults.previewFps,
     lockType: obj.lockType === true,
     lockPalette: obj.lockPalette === true,
+    variationMode: obj.variationMode === "explore" ? "explore" : "similar",
+    pinPreview: obj.pinPreview !== false,
   };
 }
 

@@ -101,12 +101,15 @@ export function createGifEncoder({ width, height, fps = 12, repeat = true }) {
     Uint8Array.of(0xf7, 0, 0), palette()];
   if (repeat) output.push(Uint8Array.of(0x21, 0xff, 0x0b),
     ascii("NETSCAPE2.0"), Uint8Array.of(3, 1, 0, 0, 0));
-  const delay = Math.max(2, Math.round(100 / fps));
   let frames = 0;
 
   return {
     addFrame(rgba) {
       const indices = indexRgba(rgba, width, height);
+      // GIF stores centiseconds. Round cumulative boundaries so fractional
+      // delays alternate without shortening the animation at rates like 30 FPS.
+      const delay = Math.round((frames + 1) * 100 / fps) -
+        Math.round(frames * 100 / fps);
       // Disposal 2 resets the transparent background between full frames.
       output.push(Uint8Array.of(0x21, 0xf9, 4, 0x09),
         u16(delay), Uint8Array.of(0, 0));

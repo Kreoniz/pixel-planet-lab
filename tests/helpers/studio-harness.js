@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { defaultPlanetState, palettes, presets } from "../../src/config.js";
 import { createFramePlan } from "../../src/animation-frames.js";
+import { generatePlanet, resetPlanet } from "../../src/planet-generator.js";
 import { moonOrbitVectors } from "../../src/moon-orbits.js";
 import { normalizePlanetState, decodePlanetCode } from "../../src/planet-state.js";
 import { nextPresetState } from "../../src/editor-state.js";
@@ -93,7 +94,7 @@ export function createStudio() {
     canvas: node("#planetCanvas"), statusEl: node("#status"), batchStrip: {},
     document: { hidden: true, querySelector: node, querySelectorAll: () => [], createElement: () => node(Symbol()) },
     loadModule: (name) => typeof modules[name] === "function" ? modules[name]() : modules[name],
-    animationSummary, createFramePlan, moonOrbitVectors, normalizePlanetState, decodePlanetCode, nextPresetState, defaultPlanetState, presets, AbortController, setTimeout,
+    animationSummary, createFramePlan, generatePlanet, resetPlanet, moonOrbitVectors, normalizePlanetState, decodePlanetCode, nextPresetState, defaultPlanetState, presets, AbortController, setTimeout,
     editorPrefs: { previewFps: 5, lockType: false, lockPalette: false },
     lastTickSeconds: 0, lastRenderedMs: -Infinity, fpsFrames: 0, fpsTime: 0,
     fpsEl: node("#fps"), requestAnimationFrame() {},

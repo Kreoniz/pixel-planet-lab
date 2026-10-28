@@ -7,6 +7,7 @@ import { createAnimationStore, normalizeAnimationSettings, animationSummary } fr
 import { chooseExportPreset, updateExportOption, createExportOptionStore } from "./export-options.js";
 import { createHistory, createSessionStore, normalizePreferences, nextPresetState } from "./editor-state.js";
 import { registerEditorHotkeys } from "./hotkeys.js";
+import { generatePlanet, resetPlanet } from "./planet-generator.js";
 import { moonOrbitVectors } from "./moon-orbits.js";
 import { installMissingChunkRecovery } from "./missing-chunk-recovery.js";
 
@@ -1098,8 +1099,8 @@ function bindUi() {
   });
 
   document.querySelectorAll("[data-preference]").forEach((input) => {
-    input.addEventListener("input", () => {
-      Object.assign(editorPrefs, normalizePreferences({ ...editorPrefs, [input.dataset.preference]: Number(input.value) }));
+    input.addEventListener(input.type === "range" ? "input" : "change", () => {
+      Object.assign(editorPrefs, normalizePreferences({ ...editorPrefs, [input.dataset.preference]: input.type === "range" ? Number(input.value) : input.value }));
       session.savePreferences(editorPrefs);
       syncEditorUi(editorPrefs, editHistory);
       fpsFrames = 0;
@@ -1198,7 +1199,11 @@ function navigateEditorLink(event) {
 
 function readInput(input) {
   if (input.type === "checkbox") return input.checked;
-  if (input.dataset.format === "percent") return Number(input.value) / 100;
+  if (input.dataset.format === "percent") return Math.round(Number(input.value)) / 100;
+  if (input.type === "number" && input.dataset.precision !== undefined) {
+    const step = Number(input.step);
+    return Number((Math.round(Number(input.value) / step) * step).toFixed(6));
+  }
   if (input.type === "number" || input.type === "range") return Number(input.value);
   return input.value;
 }
@@ -1268,6 +1273,13 @@ const actions = {
     invalidate();
     recordEdit();
     setStatus(state.animate ? "Animation resumed" : "Animation paused");
+  },
+  resetWorld() {
+    Object.assign(state, resetPlanet(state));
+    syncUi(state);
+    invalidate();
+    recordEdit();
+    setStatus("Restored this planet type’s preset · seed kept · Undo to restore your edits");
   },
   randomize() {
     randomize();
@@ -1445,57 +1457,20 @@ function applyPreset(name) {
 
 function randomize() {
   const seed = Math.floor(Math.random() * 999999) + 1;
-  const rng = mulberry32(seed);
-  const keys = Object.keys(presets);
-  const previousPalette = state.palette;
-  const choice = editorPrefs.lockType
-    ? Object.values(presets).find((p) => Number(p.body) === Number(state.body)) || presets.terrestrial
-    : presets[keys[Math.floor(rng() * keys.length)]];
-  Object.assign(state, nextPresetState(state, defaultPlanetState, choice, seed));
-  state.palette = editorPrefs.lockPalette
-    ? previousPalette
-    : Object.keys(palettes)[Math.floor(rng() * Object.keys(palettes).length)];
-  state.zoom = round(0.82 + rng() * 0.24);
-  state.spin = round(0.08 + rng() * 0.58);
-  state.terrain = round(rng());
-  state.water = round(rng());
-  state.roughness = round(rng());
-  state.clouds = round(rng() * 0.9);
-  state.cloudSpeed = round(rng() * 0.75);
-  state.atmosphere = round(0.2 + rng() * 0.8);
-  state.rings = rng() > 0.6;
-  state.ringRadius = round(0.04 + rng() * 0.42);
-  state.ringTilt = round(0.15 + rng() * 0.75);
-  state.ringAngle = round(rng());
-  state.ringWidth = round(0.2 + rng() * 0.8);
-  state.ringOpacity = round(0.42 + rng() * 0.58);
-  state.ringGaps = round(rng());
-  state.ringDetail = round(0.25 + rng() * 0.75);
-  state.moons = 0;
-  state.moonSpread = round(rng());
-  state.moonTilt = round(rng());
-  state.moonSpeed = round(0.12 + rng() * 0.78);
-  state.moonSize = round(0.18 + rng() * 0.68);
-  state.lightX = round(-0.85 + rng() * 1.7);
-  state.lightY = round(-0.75 + rng() * 1.5);
-  normalizeState();
+  Object.assign(state, generatePlanet(state, { ...editorPrefs, seed }));
   syncUi(state);
   invalidate();
   recordEdit();
-  setStatus(`Random seed ${state.seed}`);
+  setStatus(`New world · seed ${state.seed}`);
 }
 
 function mutate() {
-  const rng = mulberry32((Number(state.seed) || 1) + 1337);
-  state.seed = Math.floor(rng() * 999999) + 1;
-  ["terrain", "water", "roughness", "clouds", "storm", "ice", "lava", "city", "ringRadius", "ringTilt", "ringAngle", "ringWidth", "ringOpacity", "ringGaps", "ringDetail", "moonSpread", "moonTilt", "moonSpeed", "moonSize"].forEach((key) => {
-    state[key] = round(clamp(Number(state[key]) + (rng() - 0.5) * 0.26, 0, 1));
-  });
-  normalizeState();
+  const seed = Math.floor(Math.random() * 999999) + 1;
+  Object.assign(state, generatePlanet(state, { seed, similar: true }));
   syncUi(state);
   invalidate();
   recordEdit();
-  setStatus(`Mutated seed ${state.seed}`);
+  setStatus(`Related world · seed ${state.seed}`);
 }
 
 // Optional tools form a separate chunk and are fetched only on first use.
@@ -1519,6 +1494,7 @@ async function runExtra(action) {
   }
 
   const snapshot = captureExport();
+  const generationPreferences = { ...editorPrefs };
   try {
     const extra = await import("./extra-actions.js");
     if (controller?.signal.aborted) return;
@@ -1528,8 +1504,9 @@ async function runExtra(action) {
       // use the world captured before their first lazy import or yielded frame.
       ...(isBatch ? { state, draw } : {}),
       palettes, canvas, batchStrip, downloadCanvas, downloadBlob,
+      basePlanet: snapshot.state, editorPrefs: generationPreferences,
       syncUi, normalizeState, resizeCanvas, invalidate, recordEdit,
-      setStatus, clampInt, round, sleep,
+      setStatus, clampInt, sleep,
       signal: controller?.signal,
       yieldControl: () => new Promise((resolve) => setTimeout(resolve, 0)),
     });
@@ -1690,15 +1667,6 @@ function setStatus(message) {
   }
 }
 
-function mulberry32(seed) {
-  return function rng() {
-    let t = (seed += 0x6d2b79f5);
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, Number(value)));
 }
@@ -1707,6 +1675,3 @@ function clampInt(value, min, max) {
   return Math.round(clamp(value, min, max));
 }
 
-function round(value) {
-  return Math.round(value * 100) / 100;
-}

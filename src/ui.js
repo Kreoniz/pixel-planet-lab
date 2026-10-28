@@ -66,9 +66,9 @@ export function renderApp(root) {
       <div class="batch-header">
         <div>
           <h2>Variations</h2>
-          <p>Explore multiple seeds. Select one to keep.</p>
+          <p>Explore nearby ideas or discover a different kind of world. Select one to keep.</p>
         </div>
-        <div class="batch-tools">${controlTemplate(controlSections.flatMap((section) => section.controls).find((control) => control.key === "batch"))}<button type="button" data-action="batch"${shortcutAttrs("batch")}>Generate batch</button></div>
+        <div class="batch-tools"><label class="field">Explore<select data-preference="variationMode"><option value="similar">Similar worlds</option><option value="explore">All planet types</option></select></label>${controlTemplate(controlSections.flatMap((section) => section.controls).find((control) => control.key === "batch"))}<button type="button" data-action="batch"${shortcutAttrs("batch")}>Generate batch</button></div>
       </div>
       <div class="batch-strip" id="batchStrip">
         <p class="batch-empty">Generate a batch to explore other worlds.</p>
@@ -181,6 +181,8 @@ export function syncUi(state) {
 }
 
 export function syncEditorUi(preferences, { canUndo = false, canRedo = false } = {}) {
+  const mode = document.querySelector?.('[data-preference="variationMode"]');
+  if (mode) mode.value = preferences.variationMode;
   const fps = document.querySelector?.('[data-preference="previewFps"]');
   if (fps) fps.value = String(preferences.previewFps);
   const fpsLabel = document.querySelector?.("[data-fps-target]");
@@ -317,7 +319,7 @@ function sectionTemplate(section) {
         ${section.title === "Moons" ? '<p class="section-note control-wide">Off by default. Add moons to reveal their geology and customize their orbits.</p>' : ""}
         ${section.title === "Rings" ? '<p class="section-note control-wide">Enable rings to shape their tilt, width and detail.</p>' : ""}
         ${section.title === "Export" ? exportSettingsTemplate(section) : controls}
-        ${section.title === "World" ? `<label class="field field-range control-wide" title="Target animation frame rate, not a guarantee of GPU performance">
+        ${section.title === "World" ? `<button type="button" class="section-reset control-wide" data-action="resetWorld" title="Restore this type’s authored settings while keeping the seed and output settings. You can undo this.">Reset this type · keep seed</button><label class="field field-range control-wide" title="Target animation frame rate, not a guarantee of GPU performance">
           <span class="field-label">Preview FPS target</span>
           <output data-fps-target>30 FPS</output>
           <input data-preference="previewFps" type="range" min="5" max="60" step="5" />
@@ -379,23 +381,17 @@ function controlTemplate(control) {
       </label>`;
   }
 
-  if (control.type === "percent") {
-    return `
-      <label class="field" ${common}>
-        <span class="field-label">${control.label}</span>
-        <span class="percent-field">
-          <input data-key="${key}" data-format="percent" type="number" min="0" max="100" step="1" ${describedBy} />
-          <span aria-hidden="true">%</span>
-        </span>${description}
-      </label>`;
-  }
-
+  const percent = control.type === "percent";
+  const min = percent ? 0 : control.min ?? 0;
+  const max = percent ? 100 : control.max ?? 1;
+  const step = percent ? 1 : control.step ?? 0.01;
+  const format = percent ? ' data-format="percent"' : "";
   return `
-    <label class="field field-range" ${common}>
-      <span class="field-label">${control.label}</span>
-      <output data-value="${key}"></output>
-      <input data-key="${key}" type="range" min="${control.min ?? 0}" max="${control.max ?? 1}" step="${control.step ?? 0.01}" ${describedBy} />${description}
-    </label>`;
+    <div class="field field-range" ${common}>
+      <label class="field-label" for="range-${key}">${control.label}${percent ? " (%)" : ""}</label>
+      <input class="precision-number" data-key="${key}" data-precision${format} type="number" min="${min}" max="${max}" step="${step}" aria-label="${control.label} ${percent ? "percentage" : "value"}" ${describedBy} />
+      <input id="range-${key}" data-key="${key}"${format} type="range" min="${min}" max="${max}" step="${step}" ${describedBy} />${description}
+    </div>`;
 }
 
 function escapeAttr(value) {

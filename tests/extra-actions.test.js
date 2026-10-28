@@ -82,3 +82,46 @@ test("video cancellation while waiting for recorder completion never downloads",
     assert.equal(messages.at(-1), "Video export cancelled");
   } finally { Object.assign(globalThis, saved); }
 });
+
+test("selecting a variation restores its complete thumbnail settings after intervening edits", async () => {
+  const { generateBatch } = await import("../src/extra-actions.js");
+  const { defaultPlanetState, presets, palettes } = await import("../src/config.js");
+  const { createHistory } = await import("../src/editor-state.js");
+  const oldDocument = globalThis.document;
+  const rendered = [], items = [];
+  const state = { ...defaultPlanetState, ...presets.ice, batch: 4 };
+  const original = { ...state };
+  function element() {
+    return {
+      children: [], listeners: {},
+      getContext: () => ({ drawImage() {} }),
+      append(...children) { this.children.push(...children); },
+      setAttribute() {},
+      addEventListener(name, handler) { this.listeners[name] = handler; },
+    };
+  }
+  globalThis.document = { createElement: element };
+  const history = createHistory(state);
+  try {
+    await generateBatch({
+      state, basePlanet: original, palettes, canvas: {},
+      draw() { if (state.pixelSize === 96) rendered.push({ ...state }); },
+      batchStrip: { replaceChildren() {}, append(item) { items.push(item); } },
+      syncUi() {}, normalizeState() {}, resizeCanvas() {}, invalidate() {},
+      recordEdit: () => history.commit(state), setStatus() {}, clampInt,
+      simulationSeconds: 0, editorPrefs: { variationMode: "similar" },
+    });
+    assert.deepEqual(state, original);
+    assert.equal(items.length, 4);
+    assert.equal(rendered[0].body, original.body);
+    assert.equal(rendered[0].palette, original.palette);
+    Object.assign(state, { terrain: 0.01, clouds: 0.99, lightX: 0.99, size: 512 });
+    history.commit(state);
+    const beforeSelection = { ...state };
+    items[0].listeners.click();
+    for (const key of ["seed", "terrain", "clouds", "lightX", "palette", "rings", "moons"])
+      assert.equal(state[key], rendered[0][key], key);
+    assert.equal(state.size, 512);
+    assert.deepEqual(history.undo(), beforeSelection);
+  } finally { globalThis.document = oldDocument; }
+});
